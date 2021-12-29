@@ -15,6 +15,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef HAVE_LIBEV
+#include <ev.h>
+#endif /* HAVE_LIBEV */
+
 #include "attributes.h"
 #include "bin_pack.h"
 #include "ccompat.h"
@@ -120,6 +124,13 @@ typedef struct Packet_Handler {
     void *_Nullable object;
 } Packet_Handler;
 
+#ifdef HAVE_LIBEV
+typedef struct Networking_Socket_Listener {
+    ev_io listener;
+    struct ev_loop *dispatcher;
+} Networking_Socket_Listener;
+#endif /* HAVE_LIBEV */
+
 struct Networking_Core {
     const Logger *_Nonnull log;
     const Memory *_Nonnull mem;
@@ -132,6 +143,9 @@ struct Networking_Core {
     Socket sock;
 
     Net_Profile *_Nullable udp_net_profile;
+#ifdef HAVE_LIBEV
+    Networking_Socket_Listener sock_listener;
+#endif /* HAVE_LIBEV */
 };
 
 Family net_family(const Networking_Core *net)
@@ -143,6 +157,41 @@ uint16_t net_port(const Networking_Core *net)
 {
     return net->port;
 }
+
+Socket net_sock(const Networking_Core *net)
+{
+    return net->sock;
+}
+
+#ifdef HAVE_LIBEV
+static bool net_ev_is_active(Networking_Core *net)
+{
+    return ev_is_active(&net->sock_listener.listener) || ev_is_pending(&net->sock_listener.listener);
+}
+
+void net_ev_listen(Networking_Core *net, struct ev_loop *dispatcher, net_ev_listen_cb *callback, void *data)
+{
+    if (net_ev_is_active(net)) {
+        return;
+    }
+
+    net->sock_listener.dispatcher = dispatcher;
+    net->sock_listener.listener.data = data;
+
+    ev_io_init(&net->sock_listener.listener, (void (*)(struct ev_loop *, struct ev_io *, int))(void *)callback,
+               net_socket_to_native(net->sock), EV_READ);
+    ev_io_start(dispatcher, &net->sock_listener.listener);
+}
+
+void net_ev_stop(Networking_Core *net)
+{
+    if (!net_ev_is_active(net)) {
+        return;
+    }
+
+    ev_io_stop(net->sock_listener.dispatcher, &net->sock_listener.listener);
+}
+#endif /* HAVE_LIBEV */
 
 /* Basic network functions:
  */
@@ -526,6 +575,10 @@ void kill_networking(Networking_Core *net)
     }
 
     netprof_kill(net->mem, net->udp_net_profile);
+#ifdef HAVE_LIBEV
+    net_ev_stop(net);
+#endif /* HAVE_LIBEV */
+
     mem_delete(net->mem, net);
 }
 

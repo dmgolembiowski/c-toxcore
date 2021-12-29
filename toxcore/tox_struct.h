@@ -6,6 +6,10 @@
 #ifndef C_TOXCORE_TOXCORE_TOX_STRUCT_H
 #define C_TOXCORE_TOXCORE_TOX_STRUCT_H
 
+#ifdef HAVE_LIBEV
+#include <ev.h>
+#endif /* HAVE_LIBEV */
+
 #include <pthread.h>
 
 #include "mono_time.h"
@@ -64,6 +68,16 @@ struct Tox {
     tox_group_self_join_cb *_Nullable group_self_join_callback;
     tox_group_join_fail_cb *_Nullable group_join_fail_callback;
     tox_group_moderation_cb *_Nullable group_moderation_callback;
+
+    tox_loop_begin_cb *_Nullable loop_begin_callback;
+    tox_loop_end_cb *_Nullable loop_end_callback;
+
+#ifdef HAVE_LIBEV
+    struct ev_loop *_Nullable dispatcher;
+    ev_async stop_loop;
+#else
+    bool loop_run;
+#endif /* HAVE_LIBEV */
 
     void *_Nullable toxav_object; // workaround to store a ToxAV object (setter and getter functions are available)
 };

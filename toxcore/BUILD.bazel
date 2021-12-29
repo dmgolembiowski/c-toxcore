@@ -485,6 +485,7 @@ cc_library(
         ":net_profile",
         ":os_network",
         ":util",
+        "@ev",
         "@libsodium",
         "@psocket",
         "@pthread",
@@ -814,6 +815,7 @@ cc_library(
     hdrs = ["TCP_client.h"],
     visibility = ["//c-toxcore/auto_tests:__pkg__"],
     deps = [
+        ":DHT",
         ":TCP_common",
         ":attributes",
         ":ccompat",
@@ -827,6 +829,7 @@ cc_library(
         ":network",
         ":rng",
         ":util",
+        "@ev",
     ],
 )
 
@@ -1383,6 +1386,7 @@ cc_library(
         ":tox_options",
         ":util",
         "//c-toxcore/toxencryptsave:defines",
+        "@ev",
         "@pthread",
     ],
 )

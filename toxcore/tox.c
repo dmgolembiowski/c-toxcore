@@ -15,6 +15,18 @@
 #include <assert.h>
 #include <string.h>
 
+#include <errno.h>
+
+#ifdef HAVE_LIBEV
+#include <ev.h>
+#else
+#if defined (WIN32) || defined(_WIN32) || defined(__WIN32__)
+#include <winsock2.h>
+#else
+#include <sys/select.h>
+#endif // WIN32 || _WIN32 || __WIN32__
+#endif // !HAVE_LIBEV
+
 #include "DHT.h"
 #include "Messenger.h"
 #include "TCP_client.h"
@@ -712,7 +724,8 @@ static int tox_load(Tox *tox, const uint8_t *data, uint32_t length)
                       length - cookie_len, STATE_COOKIE_TYPE);
 }
 
-Tox *tox_new(const struct Tox_Options *options, Tox_Err_New *error)
+nullable(1, 2, 3)
+static Tox *tox_new_system(const struct Tox_Options *options, Tox_Err_New *error, const Tox_System *sys)
 {
     struct Tox_Options *default_options = nullptr;
 
@@ -736,7 +749,6 @@ Tox *tox_new(const struct Tox_Options *options, Tox_Err_New *error)
     const struct Tox_Options *const opts = options != nullptr ? options : default_options;
     assert(opts != nullptr);
 
-    const Tox_System *sys = tox_options_get_operating_system(opts);
     const Tox_System default_system = tox_default_system();
 
     if (sys == nullptr) {
@@ -751,6 +763,8 @@ Tox *tox_new(const struct Tox_Options *options, Tox_Err_New *error)
     }
 
     Messenger_Options m_options = {false};
+
+    m_options.dns_enabled = !tox_options_get_experimental_disable_dns(opts);
 
     bool load_savedata_sk = false;
     bool load_savedata_tox = false;
@@ -855,9 +869,10 @@ Tox *tox_new(const struct Tox_Options *options, Tox_Err_New *error)
         }
 
         const char *const proxy_host = tox_options_get_proxy_host(opts);
+        const bool dns_enabled = !tox_options_get_experimental_disable_dns(opts);
 
         if (proxy_host == nullptr
-                || !addr_resolve_or_parse_ip(tox->sys.ns, proxy_host, &m_options.proxy_info.ip_port.ip, nullptr)) {
+                || !addr_resolve_or_parse_ip(tox->sys.ns, tox->sys.mem, proxy_host, &m_options.proxy_info.ip_port.ip, nullptr, dns_enabled)) {
             SET_ERROR_PARAMETER(error, TOX_ERR_NEW_PROXY_BAD_HOST);
             // TODO(irungentoo): TOX_ERR_NEW_PROXY_NOT_FOUND if domain.
             mem_delete(sys->mem, tox);
@@ -867,6 +882,18 @@ Tox *tox_new(const struct Tox_Options *options, Tox_Err_New *error)
 
         m_options.proxy_info.ip_port.port = net_htons(tox_options_get_proxy_port(opts));
     }
+
+#ifdef HAVE_LIBEV
+    tox->dispatcher = ev_loop_new(0);
+
+    if (tox->dispatcher == nullptr) {
+        SET_ERROR_PARAMETER(error, TOX_ERR_NEW_MALLOC);
+        tox_options_free(default_options);
+        mem_delete(sys->mem, tox);
+        return nullptr;
+    }
+
+#endif // HAVE_LIBEV
 
     tox->mono_time = mono_time_new(tox->sys.mem, sys->mono_time_callback, sys->mono_time_user_data);
 
@@ -1020,17 +1047,53 @@ Tox *tox_new(const struct Tox_Options *options, Tox_Err_New *error)
     return tox;
 }
 
+Tox *tox_new(const struct Tox_Options *options, Tox_Err_New *error)
+{
+    return tox_new_system(options, error, nullptr);
+}
+
+Tox *tox_new_testing(const Tox_Options *options, Tox_Err_New *error, const Tox_Options_Testing *testing, Tox_Err_New_Testing *testing_error)
+{
+    if (testing == nullptr) {
+        SET_ERROR_PARAMETER(error, TOX_ERR_NEW_NULL);
+        SET_ERROR_PARAMETER(testing_error, TOX_ERR_NEW_TESTING_NULL);
+        return nullptr;
+    }
+
+    if (testing->operating_system == nullptr) {
+        SET_ERROR_PARAMETER(error, TOX_ERR_NEW_NULL);
+        SET_ERROR_PARAMETER(testing_error, TOX_ERR_NEW_TESTING_NULL);
+        return nullptr;
+    }
+
+    const Tox_System *sys = testing->operating_system;
+
+    if (sys->rng == nullptr || sys->ns == nullptr || sys->mem == nullptr) {
+        SET_ERROR_PARAMETER(error, TOX_ERR_NEW_NULL);
+        SET_ERROR_PARAMETER(testing_error, TOX_ERR_NEW_TESTING_NULL);
+        return nullptr;
+    }
+
+    SET_ERROR_PARAMETER(testing_error, TOX_ERR_NEW_TESTING_OK);
+    return tox_new_system(options, error, sys);
+}
+
 void tox_kill(Tox *tox)
 {
     if (tox == nullptr) {
         return;
     }
 
+    tox_loop_stop(tox);
+
     tox_lock(tox);
-    LOGGER_ASSERT(tox->m->log, tox->m->msi_packet == nullptr, "Attempted to kill tox while toxav is still alive");
+    LOGGER_ASSERT(tox->m->log, tox->toxav_object == nullptr, "Attempted to kill tox while toxav is still alive");
     kill_groupchats(tox->m->conferences_object);
     kill_messenger(tox->m);
     mono_time_free(tox->sys.mem, tox->mono_time);
+#ifdef HAVE_LIBEV
+    ev_loop_destroy(tox->dispatcher);
+#endif
     tox_unlock(tox);
 
     if (tox->mutex != nullptr) {
@@ -1108,7 +1171,7 @@ static int32_t resolve_bootstrap_node(Tox *tox, const char *host, uint16_t port,
         return -1;
     }
 
-    const int32_t count = net_getipport(tox->sys.mem, host, root, TOX_SOCK_DGRAM);
+    const int32_t count = net_getipport(tox->sys.ns, tox->sys.mem, host, root, TOX_SOCK_DGRAM, tox->m->options.dns_enabled);
 
     if (count < 1) {
         LOGGER_DEBUG(tox->m->log, "could not resolve bootstrap node '%s'", host);
@@ -1264,6 +1327,278 @@ void tox_iterate(Tox *tox, void *user_data)
 
     tox_unlock(tox);
 }
+
+void tox_callback_loop_begin(Tox *tox, tox_loop_begin_cb *callback)
+{
+    assert(tox != nullptr);
+    tox->loop_begin_callback = callback;
+}
+
+void tox_callback_loop_end(Tox *tox, tox_loop_end_cb *callback)
+{
+    assert(tox != nullptr);
+    tox->loop_end_callback = callback;
+}
+
+#ifdef HAVE_LIBEV
+
+non_null()
+static void tox_stop_loop_async(struct ev_loop *dispatcher, ev_async *listener, int events)
+{
+    if (dispatcher == nullptr || listener == nullptr) {
+        return;
+    }
+
+    const struct Tox_Userdata *tox_data = (const struct Tox_Userdata *)listener->data;
+
+    const Messenger *m = tox_data->tox->m;
+
+    // Stop TCP listeners.
+    const uint32_t len = tcp_connections_length(nc_get_tcp_c(m->net_crypto));
+
+    for (uint32_t i = 0; i < len; ++i) {
+        const TCP_con *conn = tcp_connections_connection_at(nc_get_tcp_c(m->net_crypto), i);
+
+        assert(conn != nullptr);
+        tcp_con_ev_stop(conn->connection);
+    }
+
+    // Stop UDP listener.
+    net_ev_stop(m->net);
+
+    ev_async_stop(dispatcher, listener);
+
+    ev_break(dispatcher, EVBREAK_ALL);
+}
+
+non_null()
+static void tox_do_iterate(struct ev_loop *dispatcher, ev_io *sock_listener, int events)
+{
+    if (dispatcher == nullptr || sock_listener == nullptr) {
+        return;
+    }
+
+    struct Tox_Userdata *tox_data = (struct Tox_Userdata *)sock_listener->data;
+
+    const Messenger *m = tox_data->tox->m;
+
+    if (tox_data->tox->loop_begin_callback) {
+        tox_data->tox->loop_begin_callback(tox_data->tox, tox_data->user_data);
+    }
+
+    tox_iterate(tox_data->tox, tox_data->user_data);
+
+    // Start TCP listeners.
+    const uint32_t len = tcp_connections_length(nc_get_tcp_c(m->net_crypto));
+
+    for (uint32_t i = 0; i < len; ++i) {
+        const TCP_con *conn = tcp_connections_connection_at(nc_get_tcp_c(m->net_crypto), i);
+
+        assert(conn != nullptr);
+        tcp_con_ev_listen(conn->connection, dispatcher, tox_do_iterate, tox_data);
+    }
+
+    // Start UDP listener.
+    net_ev_listen(m->net, dispatcher, tox_do_iterate, tox_data);
+
+    if (tox_data->tox->loop_end_callback) {
+        tox_data->tox->loop_end_callback(tox_data->tox, tox_data->user_data);
+    }
+}
+
+bool tox_loop(Tox *tox, void *user_data, Tox_Err_Loop *error)
+{
+    assert(tox != nullptr);
+
+    struct Tox_Userdata tox_data = { tox, user_data };
+
+    ev_async_init(&tox->stop_loop, tox_stop_loop_async);
+    tox->stop_loop.data = &tox_data;
+    ev_async_start(tox->dispatcher, &tox->stop_loop);
+
+    ev_io stub_listener;
+    ev_init(&stub_listener, tox_do_iterate);
+    stub_listener.data = &tox_data;
+    tox_do_iterate(tox->dispatcher, &stub_listener, 0);
+
+    if (ev_run(tox->dispatcher, 0) != 0) {
+        SET_ERROR_PARAMETER(error, TOX_ERR_LOOP_BREAK);
+        return false;
+    }
+
+    SET_ERROR_PARAMETER(error, TOX_ERR_LOOP_OK);
+    return true;
+}
+
+void tox_loop_stop(Tox *tox)
+{
+    assert(tox != nullptr);
+    tox_lock(tox);
+    ev_async_send(tox->dispatcher, &tox->stop_loop);
+    tox_unlock(tox);
+}
+
+#else  // !HAVE_LIBEV
+
+non_null()
+static bool realloc_sockets(const Memory *mem, Socket **sockets_ptr, uint32_t *sockets_num, uint32_t fd_count)
+{
+    if (*sockets_num == fd_count) {
+        // No need to resize.
+        return true;
+    }
+
+    Socket *new_sockets = (Socket *)mem_vrealloc(mem, *sockets_ptr, fd_count, sizeof(Socket));
+
+    if (new_sockets == nullptr) {
+        return false;
+    }
+
+    *sockets_ptr = new_sockets;
+    *sockets_num = fd_count;
+
+    return true;
+}
+
+/**
+ * Gathers a list of every network file descriptor on which we expect
+ * I/O activity (the UDP socket and all TCP sockets).
+ *
+ * @param sockets_ptr a pointer to an array (the pointed array can be NULL).
+ * @param sockets_num the number of current known sockets (will be updated by the funciton).
+ *
+ * @return false on allocation error, true on success
+ */
+non_null()
+static bool tox_loop_get_fds(const Messenger *m, Socket **sockets_ptr, uint32_t *sockets_num)
+{
+    assert(m != nullptr);
+    assert(sockets_ptr != nullptr);
+    assert(sockets_num != nullptr);
+
+    const TCP_Connections *tcp_c = nc_get_tcp_c(m->net_crypto);
+
+    const uint32_t tcp_count = tcp_connections_length(tcp_c);
+    const uint32_t fd_count = tcp_count + 1;  // tcp_count TCP sockets + 1 UDP socket
+
+    if (!realloc_sockets(m->mem, sockets_ptr, sockets_num, fd_count)) {
+        return false;
+    }
+
+    Socket *sockets = *sockets_ptr;
+
+    // Add the TCP sockets.
+    for (uint32_t i = 0; i < tcp_count; ++i) {
+        const TCP_con *conn = tcp_connections_connection_at(tcp_c, i);
+
+        assert(conn != nullptr);
+        sockets[i] = tcp_con_sock(conn->connection);
+    }
+
+    // Add the one UDP socket.
+    sockets[fd_count - 1] = net_sock(m->net);
+
+    return true;
+}
+
+non_null()
+static bool locked_get(const Tox *tox, const bool *value)
+{
+    tox_lock(tox);
+    const bool res = *value;
+    tox_unlock(tox);
+    return res;
+}
+
+non_null()
+static void locked_set(const Tox *tox, bool *value, bool new_value)
+{
+    tox_lock(tox);
+    *value = new_value;
+    tox_unlock(tox);
+}
+
+non_null()
+static bool tox_loop_select(Tox *tox, Socket *fdlist, uint32_t fdcount)
+{
+    fd_set readable;
+    FD_ZERO(&readable);
+
+    Socket maxfd = net_socket_from_native(0);
+
+    for (uint32_t i = 0; i < fdcount; ++i) {
+        const int sock = net_socket_to_native(fdlist[i]);
+        if (sock == 0) {
+            continue;
+        }
+
+        FD_SET(sock, &readable);
+
+        if (sock > net_socket_to_native(maxfd)) {
+            maxfd = fdlist[i];
+        }
+    }
+
+    struct timeval timeout;
+
+    // TODO(cleverca22): use a longer timeout.
+    timeout.tv_sec = 0;
+
+    timeout.tv_usec = (suseconds_t)(tox_iteration_interval(tox) * 1000 * 2);
+
+    return select(net_socket_to_native(maxfd), &readable, nullptr, nullptr, &timeout) >= 0 || errno == EBADF;
+}
+
+bool tox_loop(Tox *tox, void *user_data, Tox_Err_Loop *error)
+{
+    assert(tox != nullptr);
+
+    Messenger *m = tox->m;
+
+    uint32_t fdcount = 0;
+    Socket *fdlist = nullptr;
+
+    locked_set(tox, &tox->loop_run, true);
+
+    while (locked_get(tox, &tox->loop_run)) {
+        if (tox->loop_begin_callback != nullptr) {
+            tox->loop_begin_callback(tox, user_data);
+        }
+
+        tox_iterate(tox, user_data);
+
+        // TODO(cleverca22): should we call loop_end_callback() on error?
+        if (tox->loop_end_callback != nullptr) {
+            tox->loop_end_callback(tox, user_data);
+        }
+
+        if (!tox_loop_get_fds(m, &fdlist, &fdcount)) {
+            SET_ERROR_PARAMETER(error, TOX_ERR_LOOP_GET_FDS);
+            mem_delete(m->mem, fdlist);
+            return false;
+        }
+
+        if (!tox_loop_select(tox, fdlist, fdcount)) {
+            SET_ERROR_PARAMETER(error, TOX_ERR_LOOP_SELECT);
+            mem_delete(m->mem, fdlist);
+            return false;
+        }
+    }
+
+    SET_ERROR_PARAMETER(error, TOX_ERR_LOOP_OK);
+
+    mem_delete(m->mem, fdlist);
+
+    return true;
+}
+
+void tox_loop_stop(Tox *tox)
+{
+    assert(tox != nullptr);
+    locked_set(tox, &tox->loop_run, false);
+}
+
+#endif  // !HAVE_LIBEV
 
 void tox_self_get_address(const Tox *tox, uint8_t address[TOX_ADDRESS_SIZE])
 {
@@ -2520,6 +2855,12 @@ uint32_t tox_conference_join(Tox *tox, uint32_t friend_number, const uint8_t *co
                              Tox_Err_Conference_Join *error)
 {
     assert(tox != nullptr);
+
+    if (cookie == nullptr) {
+        SET_ERROR_PARAMETER(error, TOX_ERR_CONFERENCE_JOIN_NULL);
+        return UINT32_MAX;
+    }
+
     tox_lock(tox);
     const int ret = join_groupchat(tox->m->conferences_object, friend_number, GROUPCHAT_TYPE_TEXT, cookie, length);
     tox_unlock(tox);
@@ -3209,7 +3550,7 @@ bool tox_group_reconnect(Tox *tox, uint32_t group_number, Tox_Err_Group_Reconnec
         return false;
     }
 
-    const int ret = gc_rejoin_group(tox->m->group_handler, chat);
+    const int ret = gc_rejoin_group(tox->m->group_handler, chat, nullptr, 0);
     tox_unlock(tox);
 
     switch (ret) {
@@ -3932,7 +4273,7 @@ bool tox_group_get_password(const Tox *tox, uint32_t group_number, uint8_t *pass
 }
 
 Tox_Group_Message_Id tox_group_send_message(
-    const Tox *tox, uint32_t group_number, Tox_Message_Type type, const uint8_t *message,
+    const Tox *tox, uint32_t group_number, Tox_Message_Type message_type, const uint8_t *message,
     size_t length, Tox_Err_Group_Send_Message *error)
 {
     assert(tox != nullptr);
@@ -3953,7 +4294,7 @@ Tox_Group_Message_Id tox_group_send_message(
     }
 
     uint32_t message_id = 0;
-    const int ret = gc_send_message(chat, message, length, type, &message_id);
+    const int ret = gc_send_message(chat, message, length, message_type, &message_id);
     tox_unlock(tox);
 
     switch (ret) {
@@ -3995,7 +4336,7 @@ Tox_Group_Message_Id tox_group_send_message(
 }
 
 Tox_Group_Message_Id tox_group_send_private_message(const Tox *tox, uint32_t group_number, uint32_t peer_id,
-        Tox_Message_Type type, const uint8_t *message, size_t length, Tox_Err_Group_Send_Private_Message *error)
+        Tox_Message_Type message_type, const uint8_t *message, size_t length, Tox_Err_Group_Send_Private_Message *error)
 {
     assert(tox != nullptr);
 
@@ -4015,7 +4356,7 @@ Tox_Group_Message_Id tox_group_send_private_message(const Tox *tox, uint32_t gro
     }
 
     uint32_t message_id = 0;
-    const int ret = gc_send_private_message(chat, gc_peer_id_from_int(peer_id), type, message, length, &message_id);
+    const int ret = gc_send_private_message(chat, gc_peer_id_from_int(peer_id), message_type, message, length, &message_id);
     tox_unlock(tox);
 
     switch (ret) {
@@ -4232,6 +4573,11 @@ uint32_t tox_group_invite_accept(Tox *tox, uint32_t friend_number, const uint8_t
 {
     assert(tox != nullptr);
 
+    if (invite_data == nullptr || name == nullptr) {
+        SET_ERROR_PARAMETER(error, TOX_ERR_GROUP_INVITE_ACCEPT_NULL);
+        return UINT32_MAX;
+    }
+
     tox_lock(tox);
     const int ret = gc_accept_invite(tox->m->group_handler, friend_number, invite_data, length, name, name_length, password,
                                      password_length);
@@ -4269,7 +4615,7 @@ uint32_t tox_group_invite_accept(Tox *tox, uint32_t friend_number, const uint8_t
         }
 
         case -6: {
-            SET_ERROR_PARAMETER(error, TOX_ERR_GROUP_INVITE_ACCEPT_CORE);
+            SET_ERROR_PARAMETER(error, TOX_ERR_GROUP_INVITE_ACCEPT_FRIEND_NOT_FOUND);
             return UINT32_MAX;
         }
 

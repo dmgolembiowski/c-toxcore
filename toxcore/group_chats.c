@@ -30,6 +30,7 @@
 #include "group_moderation.h"
 #include "group_pack.h"
 #include "logger.h"
+#include "mem.h"
 #include "mono_time.h"
 #include "net_crypto.h"
 #include "network.h"
@@ -1473,8 +1474,8 @@ static bool sign_gc_shared_state(GC_Chat *chat)
  * Return -2 on decryption failure.
  * Return -3 if plaintext payload length is invalid.
  */
-non_null(1, 2, 3, 5, 6) nullable(4)
-static int group_packet_unwrap(const Logger *log, const GC_Connection *gconn, uint8_t *data, uint64_t *message_id,
+non_null(1, 2, 3, 4, 6, 7) nullable(5)
+static int group_packet_unwrap(const Logger *log, const Memory *mem, const GC_Connection *gconn, uint8_t *data, uint64_t *message_id,
                                uint8_t *packet_type, const uint8_t *packet, uint16_t length)
 {
     assert(data != nullptr);
@@ -1492,7 +1493,7 @@ static int group_packet_unwrap(const Logger *log, const GC_Connection *gconn, ui
         return -1;
     }
 
-    int plain_len = decrypt_data_symmetric(gconn->session_shared_key, packet, packet + CRYPTO_NONCE_SIZE,
+    int plain_len = decrypt_data_symmetric(mem, gconn->session_shared_key, packet, packet + CRYPTO_NONCE_SIZE,
                                            length - CRYPTO_NONCE_SIZE, plain);
 
     if (plain_len <= 0) {
@@ -1533,7 +1534,7 @@ static int group_packet_unwrap(const Logger *log, const GC_Connection *gconn, ui
 }
 
 int group_packet_wrap(
-    const Logger *log, const Random *rng, const uint8_t *self_pk, const uint8_t *shared_key, uint8_t *packet,
+    const Logger *log, const Memory *mem, const Random *rng, const uint8_t *self_pk, const uint8_t *shared_key, uint8_t *packet,
     uint16_t packet_size, const uint8_t *data, uint16_t length, uint64_t message_id,
     uint8_t gp_packet_type, Net_Packet_Type net_packet_type)
 {
@@ -1588,7 +1589,7 @@ int group_packet_wrap(
         return -2;
     }
 
-    const int enc_len = encrypt_data_symmetric(shared_key, nonce, plain, plain_len, encrypt);
+    const int enc_len = encrypt_data_symmetric(mem, shared_key, nonce, plain, plain_len, encrypt);
 
     free(plain);
 
@@ -1634,7 +1635,7 @@ static bool send_lossy_group_packet(const GC_Chat *chat, const GC_Connection *gc
     }
 
     const int len = group_packet_wrap(
-                        chat->log, chat->rng, chat->self_public_key.enc, gconn->session_shared_key, packet,
+                        chat->log, chat->mem, chat->rng, chat->self_public_key.enc, gconn->session_shared_key, packet,
                         packet_size, data, length, 0, packet_type, NET_PACKET_GC_LOSSY);
 
     if (len < 0) {
@@ -5508,7 +5509,7 @@ static int handle_gc_broadcast(const GC_Session *c, GC_Chat *chat, uint32_t peer
  * Return -2 if decryption fails.
  */
 non_null()
-static int unwrap_group_handshake_packet(const Logger *log, const uint8_t *self_sk, const uint8_t *sender_pk,
+static int unwrap_group_handshake_packet(const Logger *log, const Memory *mem, const uint8_t *self_sk, const uint8_t *sender_pk,
         uint8_t *plain, size_t plain_size, const uint8_t *packet, uint16_t length)
 {
     if (length <= CRYPTO_NONCE_SIZE) {
@@ -5516,7 +5517,7 @@ static int unwrap_group_handshake_packet(const Logger *log, const uint8_t *self_
         return -1;
     }
 
-    const int plain_len = decrypt_data(sender_pk, self_sk, packet, packet + CRYPTO_NONCE_SIZE,
+    const int plain_len = decrypt_data(mem, sender_pk, self_sk, packet, packet + CRYPTO_NONCE_SIZE,
                                        length - CRYPTO_NONCE_SIZE, plain);
 
     if (plain_len < 0 || (uint32_t)plain_len != plain_size) {
@@ -5539,7 +5540,7 @@ static int unwrap_group_handshake_packet(const Logger *log, const uint8_t *self_
  */
 non_null()
 static int wrap_group_handshake_packet(
-    const Logger *log, const Random *rng, const uint8_t *self_pk, const uint8_t *self_sk,
+    const Logger *log, const Memory *mem, const Random *rng, const uint8_t *self_pk, const uint8_t *self_sk,
     const uint8_t *target_pk, uint8_t *packet, uint32_t packet_size,
     const uint8_t *data, uint16_t length)
 {
@@ -5558,7 +5559,7 @@ static int wrap_group_handshake_packet(
         return -2;
     }
 
-    const int enc_len = encrypt_data(target_pk, self_sk, nonce, data, length, encrypt);
+    const int enc_len = encrypt_data(mem, target_pk, self_sk, nonce, data, length, encrypt);
 
     if (enc_len < 0 || (size_t)enc_len != encrypt_buf_size) {
         LOGGER_ERROR(log, "Failed to encrypt group handshake packet (len: %d)", enc_len);
@@ -5622,7 +5623,7 @@ static int make_gc_handshake_packet(const GC_Chat *chat, const GC_Connection *gc
     }
 
     const int enc_len = wrap_group_handshake_packet(
-                            chat->log, chat->rng, chat->self_public_key.enc, chat->self_secret_key.enc,
+                            chat->log, chat->mem, chat->rng, chat->self_public_key.enc, chat->self_secret_key.enc,
                             gconn->addr.public_key.enc, packet, (uint16_t)packet_size, data, length);
 
     if (enc_len != GC_MIN_ENCRYPTED_HS_PAYLOAD_SIZE + nodes_size) {
@@ -5951,7 +5952,7 @@ static int handle_gc_handshake_packet(GC_Chat *chat, const uint8_t *sender_pk, c
         return -1;
     }
 
-    const int plain_len = unwrap_group_handshake_packet(chat->log, chat->self_secret_key.enc, sender_pk, data,
+    const int plain_len = unwrap_group_handshake_packet(chat->log, chat->mem, chat->self_secret_key.enc, sender_pk, data,
                           data_buf_size, packet, length);
 
     if (plain_len < GC_MIN_HS_PACKET_PAYLOAD_SIZE)  {
@@ -6181,7 +6182,7 @@ static bool handle_gc_lossless_packet(const GC_Session *c, GC_Chat *chat, const 
     uint8_t packet_type;
     uint64_t message_id;
 
-    const int len = group_packet_unwrap(chat->log, gconn, data, &message_id, &packet_type, packet, length);
+    const int len = group_packet_unwrap(chat->log, chat->mem, gconn, data, &message_id, &packet_type, packet, length);
 
     if (len < 0) {
         Ip_Ntoa ip_str;
@@ -6334,7 +6335,7 @@ static bool handle_gc_lossy_packet(const GC_Session *c, GC_Chat *chat, const uin
 
     uint8_t packet_type;
 
-    const int len = group_packet_unwrap(chat->log, gconn, data, nullptr, &packet_type, packet, length);
+    const int len = group_packet_unwrap(chat->log, chat->mem, gconn, data, nullptr, &packet_type, packet, length);
 
     if (len <= 0) {
         Ip_Ntoa ip_str;
@@ -7732,10 +7733,52 @@ int gc_group_add(GC_Session *c, Group_Privacy_State privacy_state,
     return group_number;
 }
 
+int gc_rejoin_group(GC_Session *c, GC_Chat *chat, const uint8_t *passwd, uint16_t passwd_len)
+{
+    if (c == nullptr) {
+        LOGGER_ERROR(chat->log, "NULL group session pointer.");
+        return -1;
+    }
+
+    if (passwd != nullptr && passwd_len > 0) {
+        if (!set_gc_password_local(chat, passwd, passwd_len)) {
+            LOGGER_WARNING(chat->log, "Failed to set new password during reconnect.");
+        }
+    }
+
+    chat->time_connected = 0;
+
+    if (group_can_handle_packets(chat)) {
+        send_gc_self_exit(chat, nullptr, 0);
+    }
+
+    for (uint32_t i = 1; i < chat->numpeers; ++i) {
+        GC_Connection *gconn = get_gc_connection(chat, i);
+        assert(gconn != nullptr);
+
+        gcc_mark_for_deletion(gconn, chat->tcp_conn, GC_EXIT_TYPE_SELF_DISCONNECTED, nullptr, 0);
+    }
+
+    if (is_public_chat(chat)) {
+        kill_group_friend_connection(c, chat);
+
+        if (!m_create_group_connection(c->messenger, chat)) {
+            LOGGER_WARNING(chat->log, "Failed to create new messenger connection for group");
+            return -1;
+        }
+
+        chat->update_self_announces = true;
+    }
+
+    chat->connection_state = CS_CONNECTING;
+
+    return 0;
+}
+
 int gc_group_join(GC_Session *c, const uint8_t *chat_id, const uint8_t *nick, size_t nick_length, const uint8_t *passwd,
                   uint16_t passwd_len)
 {
-    if (chat_id == nullptr || group_exists(c, chat_id) || getfriend_id(c->messenger, chat_id) != -1) {
+    if (chat_id == nullptr) {
         return -2;
     }
 
@@ -7745,6 +7788,18 @@ int gc_group_join(GC_Session *c, const uint8_t *chat_id, const uint8_t *nick, si
 
     if (nick == nullptr || nick_length == 0) {
         return -4;
+    }
+
+    GC_Chat *existing_group = gc_get_group_by_public_key(c, chat_id);
+
+    // If we're already in the group we try to reconnect to it
+    if (existing_group != nullptr) {
+        const int ret = gc_rejoin_group(c, existing_group, passwd, passwd_len);
+        return ret != 0 ? -6 : ret;
+    }
+
+    if (getfriend_id(c->messenger, chat_id) != -1) {
+        return -2;
     }
 
     const int group_number = create_new_group(c, nick, nick_length, false, GI_PUBLIC);
@@ -7803,41 +7858,6 @@ bool gc_disconnect_from_group(const GC_Session *c, GC_Chat *chat)
     }
 
     return true;
-}
-
-int gc_rejoin_group(GC_Session *c, GC_Chat *chat)
-{
-    if (c == nullptr || chat == nullptr) {
-        return -1;
-    }
-
-    chat->time_connected = 0;
-
-    if (group_can_handle_packets(chat)) {
-        send_gc_self_exit(chat, nullptr, 0);
-    }
-
-    for (uint32_t i = 1; i < chat->numpeers; ++i) {
-        GC_Connection *gconn = get_gc_connection(chat, i);
-        assert(gconn != nullptr);
-
-        gcc_mark_for_deletion(gconn, chat->tcp_conn, GC_EXIT_TYPE_SELF_DISCONNECTED, nullptr, 0);
-    }
-
-    if (is_public_chat(chat)) {
-        kill_group_friend_connection(c, chat);
-
-        if (!m_create_group_connection(c->messenger, chat)) {
-            LOGGER_WARNING(chat->log, "Failed to create new messenger connection for group");
-            return -2;
-        }
-
-        chat->update_self_announces = true;
-    }
-
-    chat->connection_state = CS_CONNECTING;
-
-    return 0;
 }
 
 bool group_not_added(const GC_Session *c, const uint8_t *chat_id, uint32_t length)
@@ -8353,7 +8373,7 @@ bool gc_group_is_valid(const GC_Chat *chat)
 /** Return true if `group_number` designates an active group in session `c`. */
 static bool group_number_valid(const GC_Session *c, int group_number)
 {
-    if (group_number < 0 || group_number >= c->chats_index) {
+    if (group_number < 0 || (uint32_t)group_number >= c->chats_index) {
         return false;
     }
 
@@ -8408,19 +8428,7 @@ GC_Chat *gc_get_group_by_public_key(const GC_Session *c, const uint8_t *public_k
 /** Return True if chat_id exists in the session chat array */
 static bool group_exists(const GC_Session *c, const uint8_t *chat_id)
 {
-    for (uint32_t i = 0; i < c->chats_index; ++i) {
-        const GC_Chat *chat = &c->chats[i];
-
-        if (chat->connection_state == CS_NONE) {
-            continue;
-        }
-
-        if (memcmp(get_chat_id(&chat->chat_public_key), chat_id, CHAT_ID_SIZE) == 0) {
-            return true;
-        }
-    }
-
-    return false;
+    return gc_get_group_by_public_key(c, chat_id) != nullptr;
 }
 
 /** Creates a new 32-byte session encryption keypair and puts the results in `public_key` and `secret_key`. */

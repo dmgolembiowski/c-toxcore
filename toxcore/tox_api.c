@@ -265,14 +265,6 @@ void tox_options_set_experimental_thread_safety(
 {
     options->experimental_thread_safety = experimental_thread_safety;
 }
-const Tox_System *tox_options_get_operating_system(const Tox_Options *options)
-{
-    return options->operating_system;
-}
-void tox_options_set_operating_system(Tox_Options *options, const Tox_System *operating_system)
-{
-    options->operating_system = operating_system;
-}
 bool tox_options_get_experimental_groups_persistence(const Tox_Options *options)
 {
     return options->experimental_groups_persistence;
@@ -281,6 +273,14 @@ void tox_options_set_experimental_groups_persistence(
     Tox_Options *options, bool experimental_groups_persistence)
 {
     options->experimental_groups_persistence = experimental_groups_persistence;
+}
+bool tox_options_get_experimental_disable_dns(const Tox_Options *options)
+{
+    return options->experimental_disable_dns;
+}
+void tox_options_set_experimental_disable_dns(Tox_Options *options, bool experimental_disable_dns)
+{
+    options->experimental_disable_dns = experimental_disable_dns;
 }
 
 const uint8_t *tox_options_get_savedata_data(const Tox_Options *options)
@@ -307,6 +307,7 @@ void tox_options_default(Tox_Options *options)
         tox_options_set_dht_announcements_enabled(options, true);
         tox_options_set_experimental_thread_safety(options, false);
         tox_options_set_experimental_groups_persistence(options, false);
+        tox_options_set_experimental_disable_dns(options, false);
     }
 }
 
@@ -895,6 +896,9 @@ const char *tox_err_conference_join_to_string(Tox_Err_Conference_Join value)
 
         case TOX_ERR_CONFERENCE_JOIN_FAIL_SEND:
             return "TOX_ERR_CONFERENCE_JOIN_FAIL_SEND";
+
+        case TOX_ERR_CONFERENCE_JOIN_NULL:
+            return "TOX_ERR_CONFERENCE_JOIN_NULL";
     }
 
     return "<invalid Tox_Err_Conference_Join>";
@@ -1340,6 +1344,9 @@ const char *tox_err_group_send_private_message_to_string(Tox_Err_Group_Send_Priv
         case TOX_ERR_GROUP_SEND_PRIVATE_MESSAGE_EMPTY:
             return "TOX_ERR_GROUP_SEND_PRIVATE_MESSAGE_EMPTY";
 
+        case TOX_ERR_GROUP_SEND_PRIVATE_MESSAGE_BAD_TYPE:
+            return "TOX_ERR_GROUP_SEND_PRIVATE_MESSAGE_BAD_TYPE";
+
         case TOX_ERR_GROUP_SEND_PRIVATE_MESSAGE_PERMISSIONS:
             return "TOX_ERR_GROUP_SEND_PRIVATE_MESSAGE_PERMISSIONS";
 
@@ -1348,9 +1355,6 @@ const char *tox_err_group_send_private_message_to_string(Tox_Err_Group_Send_Priv
 
         case TOX_ERR_GROUP_SEND_PRIVATE_MESSAGE_DISCONNECTED:
             return "TOX_ERR_GROUP_SEND_PRIVATE_MESSAGE_DISCONNECTED";
-
-        case TOX_ERR_GROUP_SEND_PRIVATE_MESSAGE_BAD_TYPE:
-            return "TOX_ERR_GROUP_SEND_PRIVATE_MESSAGE_BAD_TYPE";
     }
 
     return "<invalid Tox_Err_Group_Send_Private_Message>";
@@ -1451,11 +1455,14 @@ const char *tox_err_group_invite_accept_to_string(Tox_Err_Group_Invite_Accept va
         case TOX_ERR_GROUP_INVITE_ACCEPT_PASSWORD:
             return "TOX_ERR_GROUP_INVITE_ACCEPT_PASSWORD";
 
-        case TOX_ERR_GROUP_INVITE_ACCEPT_CORE:
-            return "TOX_ERR_GROUP_INVITE_ACCEPT_CORE";
+        case TOX_ERR_GROUP_INVITE_ACCEPT_FRIEND_NOT_FOUND:
+            return "TOX_ERR_GROUP_INVITE_ACCEPT_FRIEND_NOT_FOUND";
 
         case TOX_ERR_GROUP_INVITE_ACCEPT_FAIL_SEND:
             return "TOX_ERR_GROUP_INVITE_ACCEPT_FAIL_SEND";
+
+        case TOX_ERR_GROUP_INVITE_ACCEPT_NULL:
+            return "TOX_ERR_GROUP_INVITE_ACCEPT_NULL";
     }
 
     return "<invalid Tox_Err_Group_Invite_Accept>";

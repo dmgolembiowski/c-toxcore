@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2016-2018 The TokTok team.
+ * Copyright © 2016-2024 The TokTok team.
  * Copyright © 2014-2016 Tox project.
  */
 
@@ -240,13 +240,13 @@ int main(int argc, char *argv[])
     char *pid_file_path = nullptr;
     char *keys_file_path = nullptr;
     int start_port = 0;
-    int enable_ipv6 = 0;
-    int enable_ipv4_fallback = 0;
-    int enable_lan_discovery = 0;
-    int enable_tcp_relay = 0;
+    bool enable_ipv6 = false;
+    bool enable_ipv4_fallback = false;
+    bool enable_lan_discovery = false;
+    bool enable_tcp_relay = false;
     uint16_t *tcp_relay_ports = nullptr;
     int tcp_relay_port_count = 0;
-    int enable_motd = 0;
+    bool enable_motd = false;
     char *motd = nullptr;
 
     if (get_general_config(cfg_file_path, &pid_file_path, &keys_file_path, &start_port, &enable_ipv6, &enable_ipv4_fallback,
@@ -281,25 +281,26 @@ int main(int argc, char *argv[])
     free(pid_file_path);
 
     IP ip;
-    ip_init(&ip, enable_ipv6 != 0);
+    ip_init(&ip, enable_ipv6);
 
-    Logger *logger = logger_new();
+    const Memory *mem = os_memory();
+    const Random *rng = os_random();
+    const Network *ns = os_network();
+
+    Logger *logger = logger_new(mem);
 
     if (MIN_LOGGER_LEVEL <= LOGGER_LEVEL_DEBUG) {
         logger_callback_log(logger, toxcore_logger_callback, nullptr, nullptr);
     }
 
     const uint16_t end_port = start_port + (TOX_PORTRANGE_TO - TOX_PORTRANGE_FROM);
-    const Memory *mem = os_memory();
-    const Random *rng = os_random();
-    const Network *ns = os_network();
     Networking_Core *net = new_networking_ex(logger, mem, ns, &ip, start_port, end_port, nullptr);
 
     if (net == nullptr) {
-        if (enable_ipv6 != 0 && enable_ipv4_fallback != 0) {
+        if (enable_ipv6 && enable_ipv4_fallback) {
             log_write(LOG_LEVEL_WARNING, "Couldn't initialize IPv6 networking. Falling back to using IPv4.\n");
-            enable_ipv6 = 0;
-            ip_init(&ip, enable_ipv6 != 0);
+            enable_ipv6 = false;
+            ip_init(&ip, enable_ipv6);
             net = new_networking_ex(logger, mem, ns, &ip, start_port, end_port, nullptr);
 
             if (net == nullptr) {
@@ -334,7 +335,7 @@ int main(int argc, char *argv[])
 
     mono_time_update(mono_time);
 
-    DHT *const dht = new_dht(logger, mem, rng, ns, mono_time, net, true, enable_lan_discovery != 0);
+    DHT *const dht = new_dht(logger, mem, rng, ns, mono_time, net, true, enable_lan_discovery);
 
     if (dht == nullptr) {
         log_write(LOG_LEVEL_ERROR, "Couldn't initialize Tox DHT instance. Exiting.\n");
@@ -429,7 +430,7 @@ int main(int argc, char *argv[])
 
     gca_onion_init(group_announce, onion_a);
 
-    if (enable_motd != 0) {
+    if (enable_motd) {
         if (bootstrap_set_callbacks(dht_get_net(dht), DAEMON_VERSION_NUMBER, (uint8_t *)motd, strlen(motd) + 1) == 0) {
             log_write(LOG_LEVEL_INFO, "Set MOTD successfully.\n");
             free(motd);
@@ -472,7 +473,7 @@ int main(int argc, char *argv[])
 
     TCP_Server *tcp_server = nullptr;
 
-    if (enable_tcp_relay != 0) {
+    if (enable_tcp_relay) {
         if (tcp_relay_port_count == 0) {
             log_write(LOG_LEVEL_ERROR, "No TCP relay ports read. Exiting.\n");
             kill_onion_announce(onion_a);
@@ -488,7 +489,7 @@ int main(int argc, char *argv[])
             return 1;
         }
 
-        tcp_server = new_tcp_server(logger, mem, rng, ns, enable_ipv6 != 0,
+        tcp_server = new_tcp_server(logger, mem, rng, ns, enable_ipv6,
                                     tcp_relay_port_count, tcp_relay_ports,
                                     dht_get_self_secret_key(dht), onion, forwarding);
 
@@ -535,7 +536,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    if (bootstrap_from_config(cfg_file_path, dht, enable_ipv6 != 0)) {
+    if (bootstrap_from_config(cfg_file_path, dht, enable_ipv6)) {
         log_write(LOG_LEVEL_INFO, "List of bootstrap nodes read successfully.\n");
     } else {
         log_write(LOG_LEVEL_ERROR, "Couldn't read list of bootstrap nodes in %s. Exiting.\n", cfg_file_path);
@@ -561,7 +562,7 @@ int main(int argc, char *argv[])
 
     Broadcast_Info *broadcast = nullptr;
 
-    if (enable_lan_discovery != 0) {
+    if (enable_lan_discovery) {
         broadcast = lan_discovery_init(ns);
         log_write(LOG_LEVEL_INFO, "Initialized LAN discovery successfully.\n");
     }
@@ -589,12 +590,12 @@ int main(int argc, char *argv[])
 
         do_dht(dht);
 
-        if (enable_lan_discovery != 0 && mono_time_is_timeout(mono_time, last_lan_discovery, LAN_DISCOVERY_INTERVAL)) {
+        if (enable_lan_discovery && mono_time_is_timeout(mono_time, last_lan_discovery, LAN_DISCOVERY_INTERVAL)) {
             lan_discovery_send(dht_get_net(dht), broadcast, dht_get_self_public_key(dht), net_htons_port);
             last_lan_discovery = mono_time_get(mono_time);
         }
 
-        if (enable_tcp_relay != 0) {
+        if (enable_tcp_relay) {
             do_tcp_server(tcp_server, mono_time);
         }
 
@@ -618,7 +619,7 @@ int main(int argc, char *argv[])
             break;
 
         default:
-            log_write(LOG_LEVEL_INFO, "Received (%d) signal. Exiting.\n", caught_signal);
+            log_write(LOG_LEVEL_INFO, "Received (%ld) signal. Exiting.\n", (long)caught_signal);
     }
 
     lan_discovery_kill(broadcast);

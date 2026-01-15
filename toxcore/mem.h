@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2016-2018 The TokTok team.
+ * Copyright © 2016-2025 The TokTok team.
  * Copyright © 2013 Tox project.
  */
 
@@ -17,25 +17,26 @@
 extern "C" {
 #endif
 
-typedef void *mem_malloc_cb(void *obj, uint32_t size);
-typedef void *mem_calloc_cb(void *obj, uint32_t nmemb, uint32_t size);
-typedef void *mem_realloc_cb(void *obj, void *ptr, uint32_t size);
-typedef void mem_free_cb(void *obj, void *ptr);
+/** @brief Allocate a byte array, similar to malloc. */
+typedef void *_Nullable memory_malloc_cb(void *_Nullable self, uint32_t size);
+/** @brief Reallocate a byte array, similar to realloc. */
+typedef void *_Nullable memory_realloc_cb(void *_Nullable self, void *_Nullable ptr, uint32_t size);
+/**
+ * @brief Deallocate a byte or object array, similar to free.
+ */
+typedef void memory_dealloc_cb(void *_Nullable self, void *_Nullable ptr);
 
 /** @brief Functions wrapping standard C memory allocation functions. */
 typedef struct Memory_Funcs {
-    mem_malloc_cb *malloc;
-    mem_calloc_cb *calloc;
-    mem_realloc_cb *realloc;
-    mem_free_cb *free;
+    memory_malloc_cb *_Nonnull malloc_callback;
+    memory_realloc_cb *_Nonnull realloc_callback;
+    memory_dealloc_cb *_Nonnull dealloc_callback;
 } Memory_Funcs;
 
 typedef struct Memory {
-    const Memory_Funcs *funcs;
-    void *obj;
+    const Memory_Funcs *_Nonnull funcs;
+    void *_Nullable user_data;
 } Memory;
-
-const Memory *os_memory(void);
 
 /**
  * @brief Allocate an array of a given size for built-in types.
@@ -43,21 +44,32 @@ const Memory *os_memory(void);
  * The array will not be initialised. Supported built-in types are
  * `uint8_t`, `int8_t`, and `int16_t`.
  */
-non_null() void *mem_balloc(const Memory *mem, uint32_t size);
+void *_Nullable mem_balloc(const Memory *_Nonnull mem, uint32_t size);
 
 /**
- * @brief Allocate a single object.
+ * @brief Resize an array of a given size for built-in types.
+ *
+ * If used for a type other than byte-sized types, `size` needs to be manually
+ * multiplied by the element size.
+ */
+void *_Nullable mem_brealloc(const Memory *_Nonnull mem, void *_Nullable ptr, uint32_t size);
+
+/**
+ * @brief Allocate a single zero-initialised object.
  *
  * Always use as `(T *)mem_alloc(mem, sizeof(T))`.
+ *
+ * @param mem The memory allocator.
+ * @param size Size in bytes of each element.
  */
-non_null() void *mem_alloc(const Memory *mem, uint32_t size);
+void *_Nullable mem_alloc(const Memory *_Nonnull mem, uint32_t size);
 
 /**
  * @brief Allocate a vector (array) of objects.
  *
  * Always use as `(T *)mem_valloc(mem, N, sizeof(T))`.
  */
-non_null() void *mem_valloc(const Memory *mem, uint32_t nmemb, uint32_t size);
+void *_Nullable mem_valloc(const Memory *_Nonnull mem, uint32_t nmemb, uint32_t size);
 
 /**
  * @brief Resize an object vector.
@@ -74,13 +86,14 @@ non_null() void *mem_valloc(const Memory *mem, uint32_t nmemb, uint32_t size);
  * case where the multiplication would overflow. If such an overflow occurs,
  * `mem_vrealloc()` returns `nullptr`.
  */
-non_null(1) nullable(2) void *mem_vrealloc(const Memory *mem, void *ptr, uint32_t nmemb, uint32_t size);
+void *_Nullable mem_vrealloc(const Memory *_Nonnull mem, void *_Nullable ptr, uint32_t nmemb, uint32_t size);
 
 /** @brief Free an array, object, or object vector. */
-non_null(1) nullable(2) void mem_delete(const Memory *mem, void *ptr);
+void mem_delete(const Memory *_Nonnull mem, void *_Nullable ptr);
 
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
 
 #endif /* C_TOXCORE_TOXCORE_MEM_H */
+

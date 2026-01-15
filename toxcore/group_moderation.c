@@ -10,8 +10,8 @@
 #include "group_moderation.h"
 
 #include <assert.h>
-
 #include <stdlib.h>
+
 #include <string.h>
 #include <time.h>
 
@@ -20,8 +20,33 @@
 #include "ccompat.h"
 #include "crypto_core.h"
 #include "logger.h"
+#include "mem.h"
 #include "network.h"
 #include "util.h"
+
+static int compare_signatures(const void *a, const void *b)
+{
+    return memcmp(a, b, SIGNATURE_SIZE);
+}
+
+static int compare_sig_pks(const void *a, const void *b)
+{
+    return memcmp(a, b, SIG_PUBLIC_KEY_SIZE);
+}
+
+static int compare_sanctions(const void *a, const void *b)
+{
+    const Mod_Sanction *sa = (const Mod_Sanction *)a;
+    const Mod_Sanction *sb = (const Mod_Sanction *)b;
+    return memcmp(sa->signature, sb->signature, SIGNATURE_SIZE);
+}
+
+static int compare_mod_pointers(const void *a, const void *b)
+{
+    const uint8_t *const *mod_a = (const uint8_t *const *)a;
+    const uint8_t *const *mod_b = (const uint8_t *const *)b;
+    return memcmp(*mod_a, *mod_b, SIG_PUBLIC_KEY_SIZE);
+}
 
 static_assert(MOD_SANCTIONS_CREDS_SIZE <= MAX_PACKET_SIZE_NO_HEADERS,
               "MOD_SANCTIONS_CREDS_SIZE must be <= the maximum allowed payload size");
@@ -34,12 +59,13 @@ static_assert(MOD_MAX_NUM_MODERATORS <= MOD_MAX_NUM_MODERATORS_LIMIT,
 static_assert(MOD_MAX_NUM_SANCTIONS <= MOD_MAX_NUM_SANCTIONS_LIMIT,
               "MOD_MAX_NUM_SANCTIONS must be <= MOD_MAX_NUM_SANCTIONS_LIMIT");
 
-uint16_t mod_list_packed_size(const Moderation *moderation)
+/** @brief Returns the size in bytes of the packed moderation list. */
+uint16_t mod_list_packed_size(const Moderation *_Nonnull moderation)
 {
     return moderation->num_mods * MOD_LIST_ENTRY_SIZE;
 }
 
-int mod_list_unpack(Moderation *moderation, const uint8_t *data, uint16_t length, uint16_t num_mods)
+int mod_list_unpack(Moderation *_Nonnull moderation, const uint8_t *_Nonnull data, uint16_t length, uint16_t num_mods)
 {
     if (length < num_mods * MOD_LIST_ENTRY_SIZE) {
         return -1;
@@ -51,7 +77,7 @@ int mod_list_unpack(Moderation *moderation, const uint8_t *data, uint16_t length
         return 0;
     }
 
-    uint8_t **tmp_list = (uint8_t **)calloc(num_mods, sizeof(uint8_t *));
+    uint8_t **tmp_list = (uint8_t **)mem_valloc(moderation->mem, num_mods, sizeof(uint8_t *));
 
     if (tmp_list == nullptr) {
         return -1;
@@ -60,7 +86,7 @@ int mod_list_unpack(Moderation *moderation, const uint8_t *data, uint16_t length
     uint16_t unpacked_len = 0;
 
     for (uint16_t i = 0; i < num_mods; ++i) {
-        uint8_t *entry = (uint8_t *)malloc(MOD_LIST_ENTRY_SIZE);
+        uint8_t *entry = (uint8_t *)mem_balloc(moderation->mem, MOD_LIST_ENTRY_SIZE);
 
         if (entry == nullptr) {
             free_uint8_t_pointer_array(moderation->mem, tmp_list, i);
@@ -76,22 +102,24 @@ int mod_list_unpack(Moderation *moderation, const uint8_t *data, uint16_t length
     moderation->mod_list = tmp_list;
     moderation->num_mods = num_mods;
 
+    qsort(moderation->mod_list, moderation->num_mods, sizeof(uint8_t *), compare_mod_pointers);
+
     return unpacked_len;
 }
 
-void mod_list_pack(const Moderation *moderation, uint8_t *data)
+void mod_list_pack(const Moderation *_Nonnull moderation, uint8_t *_Nonnull data)
 {
     for (uint16_t i = 0; i < moderation->num_mods; ++i) {
         memcpy(&data[i * MOD_LIST_ENTRY_SIZE], moderation->mod_list[i], MOD_LIST_ENTRY_SIZE);
     }
 }
 
-void mod_list_get_data_hash(uint8_t *hash, const uint8_t *packed_mod_list, uint16_t length)
+void mod_list_get_data_hash(uint8_t *_Nonnull hash, const uint8_t *_Nonnull packed_mod_list, uint16_t length)
 {
     crypto_sha256(hash, packed_mod_list, length);
 }
 
-bool mod_list_make_hash(const Moderation *moderation, uint8_t *hash)
+bool mod_list_make_hash(const Moderation *_Nonnull moderation, uint8_t *_Nonnull hash)
 {
     if (moderation->num_mods == 0) {
         memzero(hash, MOD_MODERATION_HASH_SIZE);
@@ -102,7 +130,7 @@ bool mod_list_make_hash(const Moderation *moderation, uint8_t *hash)
 
     assert(data_buf_size > 0);
 
-    uint8_t *data = (uint8_t *)malloc(data_buf_size);
+    uint8_t *data = (uint8_t *)mem_balloc(moderation->mem, data_buf_size);
 
     if (data == nullptr) {
         return false;
@@ -110,9 +138,11 @@ bool mod_list_make_hash(const Moderation *moderation, uint8_t *hash)
 
     mod_list_pack(moderation, data);
 
+    qsort(data, moderation->num_mods, SIG_PUBLIC_KEY_SIZE, compare_sig_pks);
+
     mod_list_get_data_hash(hash, data, data_buf_size);
 
-    free(data);
+    mem_delete(moderation->mem, data);
 
     return true;
 }
@@ -121,8 +151,7 @@ bool mod_list_make_hash(const Moderation *moderation, uint8_t *hash)
  * Returns moderator list index for public_sig_key.
  * Returns -1 if key is not in the list.
  */
-non_null()
-static int mod_list_index_of_sig_pk(const Moderation *moderation, const uint8_t *public_sig_key)
+static int mod_list_index_of_sig_pk(const Moderation *_Nonnull moderation, const uint8_t *_Nonnull public_sig_key)
 {
     for (uint16_t i = 0; i < moderation->num_mods; ++i) {
         if (memcmp(moderation->mod_list[i], public_sig_key, SIG_PUBLIC_KEY_SIZE) == 0) {
@@ -133,7 +162,7 @@ static int mod_list_index_of_sig_pk(const Moderation *moderation, const uint8_t 
     return -1;
 }
 
-bool mod_list_verify_sig_pk(const Moderation *moderation, const uint8_t *sig_pk)
+bool mod_list_verify_sig_pk(const Moderation *_Nonnull moderation, const uint8_t *_Nonnull sig_pk)
 {
     if (memcmp(moderation->founder_public_sig_key, sig_pk, SIG_PUBLIC_KEY_SIZE) == 0) {
         return true;
@@ -148,7 +177,7 @@ bool mod_list_verify_sig_pk(const Moderation *moderation, const uint8_t *sig_pk)
     return false;
 }
 
-bool mod_list_remove_index(Moderation *moderation, uint16_t index)
+bool mod_list_remove_index(Moderation *_Nonnull moderation, uint16_t index)
 {
     if (index >= moderation->num_mods) {
         return false;
@@ -166,10 +195,10 @@ bool mod_list_remove_index(Moderation *moderation, uint16_t index)
                MOD_LIST_ENTRY_SIZE);
     }
 
-    free(moderation->mod_list[moderation->num_mods]);
+    mem_delete(moderation->mem, moderation->mod_list[moderation->num_mods]);
     moderation->mod_list[moderation->num_mods] = nullptr;
 
-    uint8_t **tmp_list = (uint8_t **)realloc(moderation->mod_list, moderation->num_mods * sizeof(uint8_t *));
+    uint8_t **tmp_list = (uint8_t **)mem_vrealloc(moderation->mem, moderation->mod_list, moderation->num_mods, sizeof(uint8_t *));
 
     if (tmp_list == nullptr) {
         return false;
@@ -177,10 +206,12 @@ bool mod_list_remove_index(Moderation *moderation, uint16_t index)
 
     moderation->mod_list = tmp_list;
 
+    qsort(moderation->mod_list, moderation->num_mods, sizeof(uint8_t *), compare_mod_pointers);
+
     return true;
 }
 
-bool mod_list_remove_entry(Moderation *moderation, const uint8_t *public_sig_key)
+bool mod_list_remove_entry(Moderation *_Nonnull moderation, const uint8_t *_Nonnull public_sig_key)
 {
     if (moderation->num_mods == 0) {
         return false;
@@ -197,13 +228,13 @@ bool mod_list_remove_entry(Moderation *moderation, const uint8_t *public_sig_key
     return mod_list_remove_index(moderation, (uint16_t)idx);
 }
 
-bool mod_list_add_entry(Moderation *moderation, const uint8_t *mod_data)
+bool mod_list_add_entry(Moderation *_Nonnull moderation, const uint8_t *_Nonnull mod_data)
 {
     if (moderation->num_mods >= MOD_MAX_NUM_MODERATORS) {
         return false;
     }
 
-    uint8_t **tmp_list = (uint8_t **)realloc(moderation->mod_list, (moderation->num_mods + 1) * sizeof(uint8_t *));
+    uint8_t **tmp_list = (uint8_t **)mem_vrealloc(moderation->mem, moderation->mod_list, moderation->num_mods + 1, sizeof(uint8_t *));
 
     if (tmp_list == nullptr) {
         return false;
@@ -211,7 +242,7 @@ bool mod_list_add_entry(Moderation *moderation, const uint8_t *mod_data)
 
     moderation->mod_list = tmp_list;
 
-    uint8_t *entry = (uint8_t *)malloc(MOD_LIST_ENTRY_SIZE);
+    uint8_t *entry = (uint8_t *)mem_balloc(moderation->mem, MOD_LIST_ENTRY_SIZE);
 
     if (entry == nullptr) {
         return false;
@@ -222,17 +253,19 @@ bool mod_list_add_entry(Moderation *moderation, const uint8_t *mod_data)
     tmp_list[moderation->num_mods] = entry;
     ++moderation->num_mods;
 
+    qsort(moderation->mod_list, moderation->num_mods, sizeof(uint8_t *), compare_mod_pointers);
+
     return true;
 }
 
-void mod_list_cleanup(Moderation *moderation)
+void mod_list_cleanup(Moderation *_Nullable moderation)
 {
     free_uint8_t_pointer_array(moderation->mem, moderation->mod_list, moderation->num_mods);
     moderation->num_mods = 0;
     moderation->mod_list = nullptr;
 }
 
-uint16_t sanctions_creds_pack(const Mod_Sanction_Creds *creds, uint8_t *data)
+uint16_t sanctions_creds_pack(const Mod_Sanction_Creds *_Nonnull creds, uint8_t *_Nonnull data)
 {
     uint16_t packed_len = 0;
 
@@ -255,8 +288,8 @@ uint16_t sanctions_list_packed_size(uint16_t num_sanctions)
     return MOD_SANCTION_PACKED_SIZE * num_sanctions;
 }
 
-int sanctions_list_pack(uint8_t *data, uint16_t length, const Mod_Sanction *sanctions, uint16_t num_sanctions,
-                        const Mod_Sanction_Creds *creds)
+int sanctions_list_pack(uint8_t *_Nonnull data, uint16_t length, const Mod_Sanction *_Nullable sanctions, uint16_t num_sanctions,
+                        const Mod_Sanction_Creds *_Nullable creds)
 {
     assert(sanctions != nullptr || num_sanctions == 0);
     assert(sanctions != nullptr || creds != nullptr);
@@ -314,7 +347,7 @@ int sanctions_list_pack(uint8_t *data, uint16_t length, const Mod_Sanction *sanc
     return packed_len + cred_len;
 }
 
-uint16_t sanctions_creds_unpack(Mod_Sanction_Creds *creds, const uint8_t *data)
+uint16_t sanctions_creds_unpack(Mod_Sanction_Creds *_Nonnull creds, const uint8_t *_Nonnull data)
 {
     uint16_t len_processed = 0;
 
@@ -332,8 +365,8 @@ uint16_t sanctions_creds_unpack(Mod_Sanction_Creds *creds, const uint8_t *data)
     return len_processed;
 }
 
-int sanctions_list_unpack(Mod_Sanction *sanctions, Mod_Sanction_Creds *creds, uint16_t max_sanctions,
-                          const uint8_t *data, uint16_t length, uint16_t *processed_data_len)
+int sanctions_list_unpack(Mod_Sanction *_Nonnull sanctions, Mod_Sanction_Creds *_Nonnull creds, uint16_t max_sanctions,
+                          const uint8_t *_Nonnull data, uint16_t length, uint16_t *_Nullable processed_data_len)
 {
     uint16_t num = 0;
     uint16_t len_processed = 0;
@@ -405,9 +438,8 @@ int sanctions_list_unpack(Mod_Sanction *sanctions, Mod_Sanction_Creds *creds, ui
  *
  * Return true on success.
  */
-non_null(4) nullable(1)
-static bool sanctions_list_make_hash(const Mod_Sanction *sanctions, uint32_t new_version, uint16_t num_sanctions,
-                                     uint8_t *hash)
+static bool sanctions_list_make_hash(const Memory *_Nonnull mem, const Mod_Sanction *_Nullable sanctions, uint32_t new_version, uint16_t num_sanctions,
+                                     bool sort, uint8_t *_Nonnull hash)
 {
     if (num_sanctions == 0 || sanctions == nullptr) {
         memzero(hash, MOD_SANCTION_HASH_SIZE);
@@ -422,7 +454,7 @@ static bool sanctions_list_make_hash(const Mod_Sanction *sanctions, uint32_t new
         return false;
     }
 
-    uint8_t *data = (uint8_t *)malloc(data_buf_size);
+    uint8_t *data = (uint8_t *)mem_balloc(mem, data_buf_size);
 
     if (data == nullptr) {
         return false;
@@ -432,10 +464,14 @@ static bool sanctions_list_make_hash(const Mod_Sanction *sanctions, uint32_t new
         memcpy(&data[i * SIGNATURE_SIZE], sanctions[i].signature, SIGNATURE_SIZE);
     }
 
+    if (sort) {
+        qsort(data, num_sanctions, SIGNATURE_SIZE, compare_signatures);
+    }
+
     memcpy(&data[sig_data_size], &new_version, sizeof(uint32_t));
     crypto_sha256(hash, data, data_buf_size);
 
-    free(data);
+    mem_delete(mem, data);
 
     return true;
 }
@@ -444,8 +480,7 @@ static bool sanctions_list_make_hash(const Mod_Sanction *sanctions, uint32_t new
  *
  * Returns true on success.
  */
-non_null()
-static bool sanctions_list_validate_entry(const Moderation *moderation, const Mod_Sanction *sanction)
+static bool sanctions_list_validate_entry(const Moderation *_Nonnull moderation, const Mod_Sanction *_Nonnull sanction)
 {
     if (!mod_list_verify_sig_pk(moderation, sanction->setter_public_sig_key)) {
         return false;
@@ -470,19 +505,17 @@ static bool sanctions_list_validate_entry(const Moderation *moderation, const Mo
                                    sanction->setter_public_sig_key);
 }
 
-non_null()
-static uint16_t sanctions_creds_get_checksum(const Mod_Sanction_Creds *creds)
+static uint16_t sanctions_creds_get_checksum(const Mod_Sanction_Creds *_Nonnull creds)
 {
     return data_checksum(creds->hash, sizeof(creds->hash));
 }
 
-non_null()
-static void sanctions_creds_set_checksum(Mod_Sanction_Creds *creds)
+static void sanctions_creds_set_checksum(Mod_Sanction_Creds *_Nonnull creds)
 {
     creds->checksum = sanctions_creds_get_checksum(creds);
 }
 
-bool sanctions_list_make_creds(Moderation *moderation)
+bool sanctions_list_make_creds(Moderation *_Nonnull moderation)
 {
     const Mod_Sanction_Creds old_creds = moderation->sanctions_creds;
 
@@ -492,8 +525,8 @@ bool sanctions_list_make_creds(Moderation *moderation)
 
     uint8_t hash[MOD_SANCTION_HASH_SIZE];
 
-    if (!sanctions_list_make_hash(moderation->sanctions, moderation->sanctions_creds.version,
-                                  moderation->num_sanctions, hash)) {
+    if (!sanctions_list_make_hash(moderation->mem, moderation->sanctions, moderation->sanctions_creds.version,
+                                  moderation->num_sanctions, true, hash)) {
         moderation->sanctions_creds = old_creds;
         return false;
     }
@@ -522,9 +555,8 @@ bool sanctions_list_make_creds(Moderation *moderation)
  *
  * Returns true on success.
  */
-non_null(1, 3) nullable(2)
-static bool sanctions_creds_validate(const Moderation *moderation, const Mod_Sanction *sanctions,
-                                     const Mod_Sanction_Creds *creds, uint16_t num_sanctions)
+static bool sanctions_creds_validate(const Moderation *_Nonnull moderation, const Mod_Sanction *_Nullable sanctions,
+                                     const Mod_Sanction_Creds *_Nonnull creds, uint16_t num_sanctions)
 {
     if (!mod_list_verify_sig_pk(moderation, creds->sig_pk)) {
         LOGGER_WARNING(moderation->log, "Invalid credentials signature pk");
@@ -533,15 +565,23 @@ static bool sanctions_creds_validate(const Moderation *moderation, const Mod_San
 
     uint8_t hash[MOD_SANCTION_HASH_SIZE];
 
-    if (!sanctions_list_make_hash(sanctions, creds->version, num_sanctions, hash)) {
+    if (!sanctions_list_make_hash(moderation->mem, sanctions, creds->version, num_sanctions, true, hash)) {
         return false;
     }
 
     if (memcmp(hash, creds->hash, MOD_SANCTION_HASH_SIZE) != 0) {
-        LOGGER_WARNING(moderation->log, "Invalid credentials hash");
-        return false;
-    }
+        /* Some older/other clients might not sort the signatures.
+         * Try calculating the hash without sorting.
+         */
+        if (!sanctions_list_make_hash(moderation->mem, sanctions, creds->version, num_sanctions, false, hash)) {
+            return false;
+        }
 
+        if (memcmp(hash, creds->hash, MOD_SANCTION_HASH_SIZE) != 0) {
+            LOGGER_WARNING(moderation->log, "Invalid credentials hash");
+            return false;
+        }
+    }
     if (creds->checksum != sanctions_creds_get_checksum(creds)) {
         LOGGER_WARNING(moderation->log, "Invalid credentials checksum");
         return false;
@@ -563,8 +603,8 @@ static bool sanctions_creds_validate(const Moderation *moderation, const Mod_San
     return true;
 }
 
-bool sanctions_list_check_integrity(const Moderation *moderation, const Mod_Sanction_Creds *creds,
-                                    const Mod_Sanction *sanctions, uint16_t num_sanctions)
+bool sanctions_list_check_integrity(const Moderation *_Nonnull moderation, const Mod_Sanction_Creds *_Nonnull creds,
+                                    const Mod_Sanction *_Nonnull sanctions, uint16_t num_sanctions)
 {
     for (uint16_t i = 0; i < num_sanctions; ++i) {
         if (!sanctions_list_validate_entry(moderation, &sanctions[i])) {
@@ -587,9 +627,8 @@ bool sanctions_list_check_integrity(const Moderation *moderation, const Mod_Sanc
  *
  * @retval false if sanctions credentials validation fails.
  */
-non_null(1, 2) nullable(3)
-static bool sanctions_apply_new(Moderation *moderation, Mod_Sanction *new_sanctions,
-                                const Mod_Sanction_Creds *new_creds,
+static bool sanctions_apply_new(Moderation *_Nonnull moderation, Mod_Sanction *_Nonnull new_sanctions,
+                                const Mod_Sanction_Creds *_Nullable new_creds,
                                 uint16_t num_sanctions)
 {
     if (new_creds != nullptr) {
@@ -601,6 +640,8 @@ static bool sanctions_apply_new(Moderation *moderation, Mod_Sanction *new_sancti
         moderation->sanctions_creds = *new_creds;
     }
 
+    qsort(new_sanctions, num_sanctions, sizeof(Mod_Sanction), compare_sanctions);
+
     sanctions_list_cleanup(moderation);
     moderation->sanctions = new_sanctions;
     moderation->num_sanctions = num_sanctions;
@@ -611,10 +652,9 @@ static bool sanctions_apply_new(Moderation *moderation, Mod_Sanction *new_sancti
 /** @brief Returns a copy of the sanctions list. The caller is responsible for freeing the
  * memory returned by this function.
  */
-non_null()
-static Mod_Sanction *sanctions_list_copy(const Mod_Sanction *sanctions, uint16_t num_sanctions)
+static Mod_Sanction *sanctions_list_copy(const Memory *_Nonnull mem, const Mod_Sanction *_Nonnull sanctions, uint16_t num_sanctions)
 {
-    Mod_Sanction *copy = (Mod_Sanction *)calloc(num_sanctions, sizeof(Mod_Sanction));
+    Mod_Sanction *copy = (Mod_Sanction *)mem_valloc(mem, num_sanctions, sizeof(Mod_Sanction));
 
     if (copy == nullptr) {
         return nullptr;
@@ -631,8 +671,7 @@ static Mod_Sanction *sanctions_list_copy(const Mod_Sanction *sanctions, uint16_t
  *
  * Returns true on success.
  */
-non_null(1) nullable(3)
-static bool sanctions_list_remove_index(Moderation *moderation, uint16_t index, const Mod_Sanction_Creds *creds)
+static bool sanctions_list_remove_index(Moderation *_Nonnull moderation, uint16_t index, const Mod_Sanction_Creds *_Nullable creds)
 {
     if (index >= moderation->num_sanctions) {
         return false;
@@ -655,7 +694,10 @@ static bool sanctions_list_remove_index(Moderation *moderation, uint16_t index, 
     }
 
     /* Operate on a copy of the list in case something goes wrong. */
-    Mod_Sanction *sanctions_copy = sanctions_list_copy(moderation->sanctions, moderation->num_sanctions);
+    if (moderation->sanctions == nullptr) {
+        return false;
+    }
+    Mod_Sanction *sanctions_copy = sanctions_list_copy(moderation->mem, moderation->sanctions, moderation->num_sanctions);
 
     if (sanctions_copy == nullptr) {
         return false;
@@ -665,23 +707,23 @@ static bool sanctions_list_remove_index(Moderation *moderation, uint16_t index, 
         sanctions_copy[index] = sanctions_copy[new_num];
     }
 
-    Mod_Sanction *new_list = (Mod_Sanction *)realloc(sanctions_copy, new_num * sizeof(Mod_Sanction));
+    Mod_Sanction *new_list = (Mod_Sanction *)mem_vrealloc(moderation->mem, sanctions_copy, new_num, sizeof(Mod_Sanction));
 
     if (new_list == nullptr) {
-        free(sanctions_copy);
+        mem_delete(moderation->mem, sanctions_copy);
         return false;
     }
 
     if (!sanctions_apply_new(moderation, new_list, creds, new_num)) {
-        free(new_list);
+        mem_delete(moderation->mem, new_list);
         return false;
     }
 
     return true;
 }
 
-bool sanctions_list_remove_observer(Moderation *moderation, const uint8_t *public_key,
-                                    const Mod_Sanction_Creds *creds)
+bool sanctions_list_remove_observer(Moderation *_Nonnull moderation, const uint8_t *_Nonnull public_key,
+                                    const Mod_Sanction_Creds *_Nullable creds)
 {
     for (uint16_t i = 0; i < moderation->num_sanctions; ++i) {
         const Mod_Sanction *curr_sanction = &moderation->sanctions[i];
@@ -706,7 +748,7 @@ bool sanctions_list_remove_observer(Moderation *moderation, const uint8_t *publi
     return false;
 }
 
-bool sanctions_list_is_observer(const Moderation *moderation, const uint8_t *public_key)
+bool sanctions_list_is_observer(const Moderation *_Nonnull moderation, const uint8_t *_Nonnull public_key)
 {
     for (uint16_t i = 0; i < moderation->num_sanctions; ++i) {
         const Mod_Sanction *curr_sanction = &moderation->sanctions[i];
@@ -723,7 +765,7 @@ bool sanctions_list_is_observer(const Moderation *moderation, const uint8_t *pub
     return false;
 }
 
-bool sanctions_list_entry_exists(const Moderation *moderation, const Mod_Sanction *sanction)
+bool sanctions_list_entry_exists(const Moderation *_Nonnull moderation, const Mod_Sanction *_Nonnull sanction)
 {
     if (sanction->type == SA_OBSERVER) {
         return sanctions_list_is_observer(moderation, sanction->target_public_enc_key);
@@ -732,7 +774,7 @@ bool sanctions_list_entry_exists(const Moderation *moderation, const Mod_Sanctio
     return false;
 }
 
-bool sanctions_list_add_entry(Moderation *moderation, const Mod_Sanction *sanction, const Mod_Sanction_Creds *creds)
+bool sanctions_list_add_entry(Moderation *_Nonnull moderation, const Mod_Sanction *_Nonnull sanction, const Mod_Sanction_Creds *_Nullable creds)
 {
     if (moderation->num_sanctions >= MOD_MAX_NUM_SANCTIONS) {
         LOGGER_WARNING(moderation->log, "num_sanctions %d exceeds maximum", moderation->num_sanctions);
@@ -753,7 +795,10 @@ bool sanctions_list_add_entry(Moderation *moderation, const Mod_Sanction *sancti
     Mod_Sanction *sanctions_copy = nullptr;
 
     if (moderation->num_sanctions > 0) {
-        sanctions_copy = sanctions_list_copy(moderation->sanctions, moderation->num_sanctions);
+        if (moderation->sanctions == nullptr) {
+            return false;
+        }
+        sanctions_copy = sanctions_list_copy(moderation->mem, moderation->sanctions, moderation->num_sanctions);
 
         if (sanctions_copy == nullptr) {
             return false;
@@ -761,17 +806,17 @@ bool sanctions_list_add_entry(Moderation *moderation, const Mod_Sanction *sancti
     }
 
     const uint16_t index = moderation->num_sanctions;
-    Mod_Sanction *new_list = (Mod_Sanction *)realloc(sanctions_copy, (index + 1) * sizeof(Mod_Sanction));
+    Mod_Sanction *new_list = (Mod_Sanction *)mem_vrealloc(moderation->mem, sanctions_copy, index + 1, sizeof(Mod_Sanction));
 
     if (new_list == nullptr) {
-        free(sanctions_copy);
+        mem_delete(moderation->mem, sanctions_copy);
         return false;
     }
 
     new_list[index] = *sanction;
 
     if (!sanctions_apply_new(moderation, new_list, creds, index + 1)) {
-        free(new_list);
+        mem_delete(moderation->mem, new_list);
         return false;
     }
 
@@ -784,8 +829,7 @@ bool sanctions_list_add_entry(Moderation *moderation, const Mod_Sanction *sancti
  *
  * Returns true on success.
  */
-non_null()
-static bool sanctions_list_sign_entry(const Moderation *moderation, Mod_Sanction *sanction)
+static bool sanctions_list_sign_entry(const Moderation *_Nonnull moderation, Mod_Sanction *_Nonnull sanction)
 {
     uint8_t packed_data[MOD_SANCTION_PACKED_SIZE];
     const int packed_len = sanctions_list_pack(packed_data, sizeof(packed_data), sanction, 1, nullptr);
@@ -799,7 +843,7 @@ static bool sanctions_list_sign_entry(const Moderation *moderation, Mod_Sanction
                                    moderation->self_secret_sig_key);
 }
 
-bool sanctions_list_make_entry(Moderation *moderation, const uint8_t *public_key, Mod_Sanction *sanction,
+bool sanctions_list_make_entry(Moderation *_Nonnull moderation, const uint8_t *_Nonnull public_key, Mod_Sanction *_Nonnull sanction,
                                uint8_t type)
 {
     *sanction = (Mod_Sanction) {
@@ -815,7 +859,8 @@ bool sanctions_list_make_entry(Moderation *moderation, const uint8_t *public_key
 
     memcpy(sanction->setter_public_sig_key, moderation->self_public_sig_key, SIG_PUBLIC_KEY_SIZE);
 
-    sanction->time_set = (uint64_t)time(nullptr);
+    /* Use a stable non-zero value to ensure deterministic signatures and hashes. */
+    sanction->time_set = 1;
     sanction->type = type;
 
     if (!sanctions_list_sign_entry(moderation, sanction)) {
@@ -834,7 +879,7 @@ bool sanctions_list_make_entry(Moderation *moderation, const uint8_t *public_key
 
     return true;
 }
-uint16_t sanctions_list_replace_sig(Moderation *moderation, const uint8_t *public_sig_key)
+uint16_t sanctions_list_replace_sig(Moderation *_Nonnull moderation, const uint8_t *_Nonnull public_sig_key)
 {
     uint16_t count = 0;
 
@@ -862,9 +907,9 @@ uint16_t sanctions_list_replace_sig(Moderation *moderation, const uint8_t *publi
     return count;
 }
 
-void sanctions_list_cleanup(Moderation *moderation)
+void sanctions_list_cleanup(Moderation *_Nonnull moderation)
 {
-    free(moderation->sanctions);
+    mem_delete(moderation->mem, moderation->sanctions);
 
     moderation->sanctions = nullptr;
     moderation->num_sanctions = 0;

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2023-2024 The TokTok team.
+ * Copyright © 2023-2026 The TokTok team.
  */
 
 #include "events_alloc.h"
@@ -12,6 +12,7 @@
 #include "../ccompat.h"
 #include "../mem.h"
 #include "../tox.h"
+#include "../tox_event.h"
 #include "../tox_events.h"
 
 /*****************************************************
@@ -24,9 +25,7 @@ struct Tox_Event_Conference_Connected {
     uint32_t conference_number;
 };
 
-non_null()
-static void tox_event_conference_connected_set_conference_number(Tox_Event_Conference_Connected *conference_connected,
-        uint32_t conference_number)
+static void tox_event_conference_connected_set_conference_number(Tox_Event_Conference_Connected *_Nonnull conference_connected, uint32_t conference_number)
 {
     assert(conference_connected != nullptr);
     conference_connected->conference_number = conference_number;
@@ -37,15 +36,13 @@ uint32_t tox_event_conference_connected_get_conference_number(const Tox_Event_Co
     return conference_connected->conference_number;
 }
 
-non_null()
-static void tox_event_conference_connected_construct(Tox_Event_Conference_Connected *conference_connected)
+static void tox_event_conference_connected_construct(Tox_Event_Conference_Connected *_Nonnull conference_connected)
 {
     *conference_connected = (Tox_Event_Conference_Connected) {
         0
     };
 }
-non_null()
-static void tox_event_conference_connected_destruct(Tox_Event_Conference_Connected *conference_connected, const Memory *mem)
+static void tox_event_conference_connected_destruct(Tox_Event_Conference_Connected *_Nonnull conference_connected, const Memory *_Nonnull mem)
 {
     return;
 }
@@ -56,9 +53,7 @@ bool tox_event_conference_connected_pack(
     return bin_pack_u32(bp, event->conference_number);
 }
 
-non_null()
-static bool tox_event_conference_connected_unpack_into(
-    Tox_Event_Conference_Connected *event, Bin_Unpack *bu)
+static bool tox_event_conference_connected_unpack_into(Tox_Event_Conference_Connected *_Nonnull event, Bin_Unpack *_Nonnull bu)
 {
     assert(event != nullptr);
     return bin_unpack_u32(bu, &event->conference_number);
@@ -91,13 +86,12 @@ Tox_Event_Conference_Connected *tox_event_conference_connected_new(const Memory 
 void tox_event_conference_connected_free(Tox_Event_Conference_Connected *conference_connected, const Memory *mem)
 {
     if (conference_connected != nullptr) {
-        tox_event_conference_connected_destruct(conference_connected, mem);
+        tox_event_conference_connected_destruct((Tox_Event_Conference_Connected * _Nonnull)conference_connected, mem);
     }
     mem_delete(mem, conference_connected);
 }
 
-non_null()
-static Tox_Event_Conference_Connected *tox_events_add_conference_connected(Tox_Events *events, const Memory *mem)
+static Tox_Event_Conference_Connected *tox_events_add_conference_connected(Tox_Events *_Nonnull events, const Memory *_Nonnull mem)
 {
     Tox_Event_Conference_Connected *const conference_connected = tox_event_conference_connected_new(mem);
 
@@ -109,7 +103,10 @@ static Tox_Event_Conference_Connected *tox_events_add_conference_connected(Tox_E
     event.type = TOX_EVENT_CONFERENCE_CONNECTED;
     event.data.conference_connected = conference_connected;
 
-    tox_events_add(events, &event);
+    if (!tox_events_add(events, &event)) {
+        tox_event_conference_connected_free(conference_connected, mem);
+        return nullptr;
+    }
     return conference_connected;
 }
 
@@ -127,12 +124,8 @@ bool tox_event_conference_connected_unpack(
     return tox_event_conference_connected_unpack_into(*event, bu);
 }
 
-non_null()
-static Tox_Event_Conference_Connected *tox_event_conference_connected_alloc(void *user_data)
+static Tox_Event_Conference_Connected *tox_event_conference_connected_alloc(Tox_Events_State *_Nonnull state)
 {
-    Tox_Events_State *state = tox_events_alloc(user_data);
-    assert(state != nullptr);
-
     if (state->events == nullptr) {
         return nullptr;
     }
@@ -157,7 +150,8 @@ void tox_events_handle_conference_connected(
     Tox *tox, uint32_t conference_number,
     void *user_data)
 {
-    Tox_Event_Conference_Connected *conference_connected = tox_event_conference_connected_alloc(user_data);
+    Tox_Events_State *state = tox_events_alloc(user_data);
+    Tox_Event_Conference_Connected *conference_connected = tox_event_conference_connected_alloc(state);
 
     if (conference_connected == nullptr) {
         return;

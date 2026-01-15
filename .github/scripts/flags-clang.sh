@@ -9,6 +9,11 @@ add_flag -Weverything
 
 # Disable specific warning flags for both C and C++.
 
+# We're not checking nullability, yet.
+# TODO(iphydf): Remove.
+add_flag -Wno-nullable-to-nonnull-conversion
+add_flag -Wno-nullability-completeness
+
 # Very verbose, not very useful. This warns about things like int -> uint
 # conversions that change sign without a cast and narrowing conversions.
 add_flag -Wno-conversion
@@ -30,21 +35,25 @@ add_flag -Wno-missing-braces
 add_flag -Wno-missing-field-initializers
 # We don't use this attribute. It appears in the non-NDEBUG stderr logger.
 add_flag -Wno-missing-noreturn
+# We want to use this extension.
+add_flag -Wno-nullability-extension
 # Useful sometimes, but we accept padding in structs for clarity.
 # Reordering fields to avoid padding will reduce readability.
 add_flag -Wno-padded
 # This warns on things like _XOPEN_SOURCE, which we currently need (we
 # probably won't need these in the future).
 add_flag -Wno-reserved-id-macro
-# TODO(iphydf): Clean these up. They are likely not bugs, but still
-# potential issues and probably confusing.
-add_flag -Wno-sign-compare
+# We don't want to have default cases, we want to explicitly define all cases
+add_flag -Wno-switch-default
 # __attribute__((nonnull)) causes this warning on defensive null checks.
 add_flag -Wno-tautological-pointer-compare
 # Our use of mutexes results in a false positive, see 1bbe446.
 add_flag -Wno-thread-safety-analysis
 # File transfer code has this.
 add_flag -Wno-type-limits
+# Generates false positives in toxcore similar to
+# https://github.com/llvm/llvm-project/issues/64646
+add_flag -Wno-unsafe-buffer-usage
 # Callbacks often don't use all their parameters.
 add_flag -Wno-unused-parameter
 # cimple does this better
@@ -67,6 +76,8 @@ add_cxx_flag -Wno-c99-extensions
 add_cxx_flag -Wno-old-style-cast
 # GTest does this.
 add_cxx_flag -Wno-global-constructors
+# Needed for some fuzzers.
+add_cxx_flag -Wno-exit-time-destructors
 
 # Downgrade to warning so we still see it.
 add_flag -Wno-error=unreachable-code

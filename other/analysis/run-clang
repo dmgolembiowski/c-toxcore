@@ -25,14 +25,24 @@ run() {
     -Wno-missing-braces \
     -Wno-missing-field-initializers \
     -Wno-missing-noreturn \
+    -Wno-nullability-completeness \
+    -Wno-nullability-extension \
+    -Wno-nullable-to-nonnull-conversion \
     -Wno-old-style-cast \
     -Wno-padded \
-    -Wno-sign-compare \
+    -Wno-source-uses-openmp \
+    -Wno-switch-default \
     -Wno-tautological-pointer-compare \
     -Wno-unreachable-code-return \
+    -Wno-unsafe-buffer-usage \
     -Wno-unused-parameter \
     -Wno-used-but-marked-unused \
-    -Wno-source-uses-openmp
+    -Wno-unneeded-member-function \
+    -Wno-unused-function \
+    -Wno-unused-member-function \
+    -Wno-unused-parameter \
+    -Wno-unused-template
+  # TODO(iphydf): Remove these last 5 when the test framework matures.
 }
 
 . other/analysis/variants.sh

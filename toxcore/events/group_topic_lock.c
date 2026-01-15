@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2023-2024 The TokTok team.
+ * Copyright © 2023-2026 The TokTok team.
  */
 
 #include "events_alloc.h"
@@ -12,6 +12,7 @@
 #include "../ccompat.h"
 #include "../mem.h"
 #include "../tox.h"
+#include "../tox_event.h"
 #include "../tox_events.h"
 #include "../tox_pack.h"
 #include "../tox_unpack.h"
@@ -27,9 +28,7 @@ struct Tox_Event_Group_Topic_Lock {
     Tox_Group_Topic_Lock topic_lock;
 };
 
-non_null()
-static void tox_event_group_topic_lock_set_group_number(Tox_Event_Group_Topic_Lock *group_topic_lock,
-        uint32_t group_number)
+static void tox_event_group_topic_lock_set_group_number(Tox_Event_Group_Topic_Lock *_Nonnull group_topic_lock, uint32_t group_number)
 {
     assert(group_topic_lock != nullptr);
     group_topic_lock->group_number = group_number;
@@ -40,9 +39,7 @@ uint32_t tox_event_group_topic_lock_get_group_number(const Tox_Event_Group_Topic
     return group_topic_lock->group_number;
 }
 
-non_null()
-static void tox_event_group_topic_lock_set_topic_lock(Tox_Event_Group_Topic_Lock *group_topic_lock,
-        Tox_Group_Topic_Lock topic_lock)
+static void tox_event_group_topic_lock_set_topic_lock(Tox_Event_Group_Topic_Lock *_Nonnull group_topic_lock, Tox_Group_Topic_Lock topic_lock)
 {
     assert(group_topic_lock != nullptr);
     group_topic_lock->topic_lock = topic_lock;
@@ -53,15 +50,13 @@ Tox_Group_Topic_Lock tox_event_group_topic_lock_get_topic_lock(const Tox_Event_G
     return group_topic_lock->topic_lock;
 }
 
-non_null()
-static void tox_event_group_topic_lock_construct(Tox_Event_Group_Topic_Lock *group_topic_lock)
+static void tox_event_group_topic_lock_construct(Tox_Event_Group_Topic_Lock *_Nonnull group_topic_lock)
 {
     *group_topic_lock = (Tox_Event_Group_Topic_Lock) {
         0
     };
 }
-non_null()
-static void tox_event_group_topic_lock_destruct(Tox_Event_Group_Topic_Lock *group_topic_lock, const Memory *mem)
+static void tox_event_group_topic_lock_destruct(Tox_Event_Group_Topic_Lock *_Nonnull group_topic_lock, const Memory *_Nonnull mem)
 {
     return;
 }
@@ -74,9 +69,7 @@ bool tox_event_group_topic_lock_pack(
            && tox_group_topic_lock_pack(event->topic_lock, bp);
 }
 
-non_null()
-static bool tox_event_group_topic_lock_unpack_into(
-    Tox_Event_Group_Topic_Lock *event, Bin_Unpack *bu)
+static bool tox_event_group_topic_lock_unpack_into(Tox_Event_Group_Topic_Lock *_Nonnull event, Bin_Unpack *_Nonnull bu)
 {
     assert(event != nullptr);
     if (!bin_unpack_array_fixed(bu, 2, nullptr)) {
@@ -114,13 +107,12 @@ Tox_Event_Group_Topic_Lock *tox_event_group_topic_lock_new(const Memory *mem)
 void tox_event_group_topic_lock_free(Tox_Event_Group_Topic_Lock *group_topic_lock, const Memory *mem)
 {
     if (group_topic_lock != nullptr) {
-        tox_event_group_topic_lock_destruct(group_topic_lock, mem);
+        tox_event_group_topic_lock_destruct((Tox_Event_Group_Topic_Lock * _Nonnull)group_topic_lock, mem);
     }
     mem_delete(mem, group_topic_lock);
 }
 
-non_null()
-static Tox_Event_Group_Topic_Lock *tox_events_add_group_topic_lock(Tox_Events *events, const Memory *mem)
+static Tox_Event_Group_Topic_Lock *tox_events_add_group_topic_lock(Tox_Events *_Nonnull events, const Memory *_Nonnull mem)
 {
     Tox_Event_Group_Topic_Lock *const group_topic_lock = tox_event_group_topic_lock_new(mem);
 
@@ -132,7 +124,10 @@ static Tox_Event_Group_Topic_Lock *tox_events_add_group_topic_lock(Tox_Events *e
     event.type = TOX_EVENT_GROUP_TOPIC_LOCK;
     event.data.group_topic_lock = group_topic_lock;
 
-    tox_events_add(events, &event);
+    if (!tox_events_add(events, &event)) {
+        tox_event_group_topic_lock_free(group_topic_lock, mem);
+        return nullptr;
+    }
     return group_topic_lock;
 }
 
@@ -150,12 +145,8 @@ bool tox_event_group_topic_lock_unpack(
     return tox_event_group_topic_lock_unpack_into(*event, bu);
 }
 
-non_null()
-static Tox_Event_Group_Topic_Lock *tox_event_group_topic_lock_alloc(void *user_data)
+static Tox_Event_Group_Topic_Lock *tox_event_group_topic_lock_alloc(Tox_Events_State *_Nonnull state)
 {
-    Tox_Events_State *state = tox_events_alloc(user_data);
-    assert(state != nullptr);
-
     if (state->events == nullptr) {
         return nullptr;
     }
@@ -180,7 +171,8 @@ void tox_events_handle_group_topic_lock(
     Tox *tox, uint32_t group_number, Tox_Group_Topic_Lock topic_lock,
     void *user_data)
 {
-    Tox_Event_Group_Topic_Lock *group_topic_lock = tox_event_group_topic_lock_alloc(user_data);
+    Tox_Events_State *state = tox_events_alloc(user_data);
+    Tox_Event_Group_Topic_Lock *group_topic_lock = tox_event_group_topic_lock_alloc(state);
 
     if (group_topic_lock == nullptr) {
         return;

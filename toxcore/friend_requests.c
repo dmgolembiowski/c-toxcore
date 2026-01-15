@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2016-2018 The TokTok team.
+ * Copyright © 2016-2025 The TokTok team.
  * Copyright © 2013 Tox project.
  */
 
@@ -8,17 +8,21 @@
  */
 #include "friend_requests.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 #include "attributes.h"
 #include "ccompat.h"
 #include "crypto_core.h"
 #include "friend_connection.h"
+#include "mem.h"
 #include "network.h"
 #include "onion.h"
 #include "onion_announce.h"
 #include "onion_client.h"
+
+static_assert(ONION_CLIENT_MAX_DATA_SIZE <= MAX_DATA_REQUEST_SIZE, "ONION_CLIENT_MAX_DATA_SIZE is too big");
+static_assert(MAX_DATA_REQUEST_SIZE <= ONION_MAX_DATA_SIZE, "MAX_DATA_REQUEST_SIZE is too big");
+static_assert(SIZE_IPPORT <= ONION_SEND_BASE, "IP_Port does not fit in the onion packet");
 
 /**
  * NOTE: The following is just a temporary fix for the multiple friend requests received at the same time problem.
@@ -32,13 +36,15 @@ struct Received_Requests {
 };
 
 struct Friend_Requests {
-    uint32_t nospam;
-    fr_friend_request_cb *handle_friendrequest;
-    uint8_t handle_friendrequest_isset;
-    void *handle_friendrequest_object;
+    const Memory *_Nonnull mem;
 
-    filter_function_cb *filter_function;
-    void *filter_function_userdata;
+    uint32_t nospam;
+    fr_friend_request_cb *_Nullable handle_friendrequest;
+    uint8_t handle_friendrequest_isset;
+    void *_Nullable handle_friendrequest_object;
+
+    filter_function_cb *_Nullable filter_function;
+    void *_Nullable filter_function_userdata;
 
     struct Received_Requests received;
 };
@@ -72,8 +78,7 @@ void set_filter_function(Friend_Requests *fr, filter_function_cb *function, void
 }
 
 /** Add to list of received friend requests. */
-non_null()
-static void addto_receivedlist(Friend_Requests *fr, const uint8_t *real_pk)
+static void addto_receivedlist(Friend_Requests *_Nonnull fr, const uint8_t *_Nonnull real_pk)
 {
     if (fr->received.requests_index >= MAX_RECEIVED_STORED) {
         fr->received.requests_index = 0;
@@ -88,8 +93,7 @@ static void addto_receivedlist(Friend_Requests *fr, const uint8_t *real_pk)
  * @retval false if it did not.
  * @retval true if it did.
  */
-non_null()
-static bool request_received(const Friend_Requests *fr, const uint8_t *real_pk)
+static bool request_received(const Friend_Requests *_Nonnull fr, const uint8_t *_Nonnull real_pk)
 {
     for (uint32_t i = 0; i < MAX_RECEIVED_STORED; ++i) {
         if (pk_equal(fr->received.requests[i], real_pk)) {
@@ -105,7 +109,7 @@ static bool request_received(const Friend_Requests *fr, const uint8_t *real_pk)
  * @retval 0 if it removed it successfully.
  * @retval -1 if it didn't find it.
  */
-int remove_request_received(Friend_Requests *fr, const uint8_t *real_pk)
+int remove_request_received(Friend_Requests *_Nonnull fr, const uint8_t *_Nonnull real_pk)
 {
     for (uint32_t i = 0; i < MAX_RECEIVED_STORED; ++i) {
         if (pk_equal(fr->received.requests[i], real_pk)) {
@@ -117,9 +121,7 @@ int remove_request_received(Friend_Requests *fr, const uint8_t *real_pk)
     return -1;
 }
 
-non_null()
-static int friendreq_handlepacket(void *object, const uint8_t *source_pubkey, const uint8_t *data, uint16_t length,
-                                  void *userdata)
+static int friendreq_handlepacket(void *_Nonnull object, const uint8_t *_Nonnull source_pubkey, const uint8_t *_Nonnull data, uint16_t length, void *_Nonnull userdata)
 {
     Friend_Requests *const fr = (Friend_Requests *)object;
 
@@ -164,12 +166,24 @@ void friendreq_init(Friend_Requests *fr, Friend_Connections *fr_c)
     set_friend_request_callback(fr_c, &friendreq_handlepacket, fr);
 }
 
-Friend_Requests *friendreq_new(void)
+Friend_Requests *friendreq_new(const Memory *mem)
 {
-    return (Friend_Requests *)calloc(1, sizeof(Friend_Requests));
+    Friend_Requests *fr = (Friend_Requests *)mem_alloc(mem, sizeof(Friend_Requests));
+
+    if (fr == nullptr) {
+        return nullptr;
+    }
+
+    fr->mem = mem;
+
+    return fr;
 }
 
 void friendreq_kill(Friend_Requests *fr)
 {
-    free(fr);
+    if (fr == nullptr) {
+        return;
+    }
+
+    mem_delete(fr->mem, fr);
 }

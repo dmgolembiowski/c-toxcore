@@ -1,25 +1,26 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2022 The TokTok team.
+ * Copyright © 2022-2025 The TokTok team.
  */
 
 #include "bin_unpack.h"
 
 #include <assert.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "../third_party/cmp/cmp.h"
 #include "attributes.h"
 #include "ccompat.h"
+#include "mem.h"
 
 struct Bin_Unpack {
-    const uint8_t *bytes;
+    const Memory *_Nonnull mem;
+
+    const uint8_t *_Nonnull bytes;
     uint32_t bytes_size;
     cmp_ctx_t ctx;
 };
 
-non_null()
-static bool buf_reader(cmp_ctx_t *ctx, void *data, size_t limit)
+static bool buf_reader(cmp_ctx_t *_Nonnull ctx, void *_Nonnull data, size_t limit)
 {
     uint8_t *bytes = (uint8_t *)data;
     Bin_Unpack *reader = (Bin_Unpack *)ctx->buf;
@@ -33,8 +34,7 @@ static bool buf_reader(cmp_ctx_t *ctx, void *data, size_t limit)
     return true;
 }
 
-non_null()
-static bool buf_skipper(cmp_ctx_t *ctx, size_t count)
+static bool buf_skipper(cmp_ctx_t *_Nonnull ctx, size_t count)
 {
     Bin_Unpack *reader = (Bin_Unpack *)ctx->buf;
     assert(reader != nullptr && reader->bytes != nullptr);
@@ -46,25 +46,24 @@ static bool buf_skipper(cmp_ctx_t *ctx, size_t count)
     return true;
 }
 
-non_null()
-static size_t null_writer(cmp_ctx_t *ctx, const void *data, size_t count)
+static size_t null_writer(cmp_ctx_t *_Nonnull ctx, const void *_Nonnull data, size_t count)
 {
     assert(count == 0);
     return 0;
 }
 
-non_null()
-static void bin_unpack_init(Bin_Unpack *bu, const uint8_t *buf, uint32_t buf_size)
+static void bin_unpack_init(Bin_Unpack *_Nonnull bu, const Memory *_Nonnull mem, const uint8_t *_Nonnull buf, uint32_t buf_size)
 {
+    bu->mem = mem;
     bu->bytes = buf;
     bu->bytes_size = buf_size;
     cmp_init(&bu->ctx, bu, buf_reader, buf_skipper, null_writer);
 }
 
-bool bin_unpack_obj(bin_unpack_cb *callback, void *obj, const uint8_t *buf, uint32_t buf_size)
+bool bin_unpack_obj(const Memory *mem, bin_unpack_cb *callback, void *obj, const uint8_t *buf, uint32_t buf_size)
 {
     Bin_Unpack bu;
-    bin_unpack_init(&bu, buf, buf_size);
+    bin_unpack_init(&bu, mem, buf, buf_size);
     return callback(obj, &bu);
 }
 
@@ -120,10 +119,14 @@ bool bin_unpack_bin(Bin_Unpack *bu, uint8_t **data_ptr, uint32_t *data_length_pt
         // There aren't as many bytes as this bin claims to want to allocate.
         return false;
     }
-    uint8_t *const data = (uint8_t *)malloc(bin_size);
+    uint8_t *const data = (uint8_t *)mem_balloc(bu->mem, bin_size);
+
+    if (data == nullptr) {
+        return false;
+    }
 
     if (!bin_unpack_bin_b(bu, data, bin_size)) {
-        free(data);
+        mem_delete(bu->mem, data);
         return false;
     }
 

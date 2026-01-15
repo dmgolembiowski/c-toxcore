@@ -1,16 +1,23 @@
+// clang-format off
+#include "../testing/support/public/simulated_environment.hh"
 #include "network.h"
+// clang-format on
 
 #include <gtest/gtest.h>
+
+#include <cstring>
 
 #include "network_test_util.hh"
 
 namespace {
 
-TEST(TestUtil, ProducesNonNullNetwork)
+TEST(SimulatedEnvironment, ProducesNonNullNetwork)
 {
-    Test_Network net;
-    const Network *ns = net;
-    EXPECT_NE(ns, nullptr);
+    tox::test::SimulatedEnvironment env;
+    auto node = env.create_node(0);
+    struct Network net = node->c_network;
+    EXPECT_NE(net.funcs, nullptr);
+    EXPECT_NE(net.obj, nullptr);
 }
 
 TEST(IpNtoa, DoesntWriteOutOfBounds)
@@ -101,7 +108,7 @@ TEST(IpportCmp, BehavesLikeMemcmp)
         << "b=" << b;
     EXPECT_EQ(  //
         ipport_cmp_handler(&a, &b, sizeof(IP_Port)),  //
-        cmp_val(memcmp(&a, &b, sizeof(IP_Port))))
+        cmp_val(std::memcmp(&a, &b, sizeof(IP_Port))))
         << "a=" << a << "\n"
         << "b=" << b;
 
@@ -114,7 +121,7 @@ TEST(IpportCmp, BehavesLikeMemcmp)
         << "b=" << b;
     EXPECT_EQ(  //
         ipport_cmp_handler(&a, &b, sizeof(IP_Port)),  //
-        cmp_val(memcmp(&a, &b, sizeof(IP_Port))))
+        cmp_val(std::memcmp(&a, &b, sizeof(IP_Port))))
         << "a=" << a << "\n"
         << "b=" << b;
 }

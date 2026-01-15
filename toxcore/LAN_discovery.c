@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2016-2018 The TokTok team.
+ * Copyright © 2016-2025 The TokTok team.
  * Copyright © 2013 Tox project.
  */
 
@@ -7,8 +7,6 @@
  * LAN discovery implementation.
  */
 #include "LAN_discovery.h"
-
-#include <stdlib.h>
 
 #if defined(_WIN32) || defined(__WIN32__) || defined(WIN32)
 // The mingw32/64 Windows library warns about including winsock2.h after
@@ -41,41 +39,45 @@
 #include "attributes.h"
 #include "ccompat.h"
 #include "crypto_core.h"
+#include "mem.h"
 #include "network.h"
 
 #define MAX_INTERFACES 16
 
 struct Broadcast_Info {
+    const Memory *mem;
+
     uint32_t count;
     IP ips[MAX_INTERFACES];
 };
 
 #if defined(_WIN32) || defined(__WIN32__) || defined(WIN32)
 
-non_null()
-static Broadcast_Info *fetch_broadcast_info(const Network *ns)
+static Broadcast_Info *fetch_broadcast_info(const Memory *_Nonnull mem, const Network *_Nonnull ns)
 {
-    Broadcast_Info *broadcast = (Broadcast_Info *)calloc(1, sizeof(Broadcast_Info));
+    Broadcast_Info *broadcast = (Broadcast_Info *)mem_alloc(mem, sizeof(Broadcast_Info));
 
     if (broadcast == nullptr) {
         return nullptr;
     }
 
-    IP_ADAPTER_INFO *adapter_info = (IP_ADAPTER_INFO *)malloc(sizeof(IP_ADAPTER_INFO));
+    broadcast->mem = mem;
+
+    IP_ADAPTER_INFO *adapter_info = (IP_ADAPTER_INFO *)mem_balloc(mem, sizeof(IP_ADAPTER_INFO));
 
     if (adapter_info == nullptr) {
-        free(broadcast);
+        mem_delete(mem, broadcast);
         return nullptr;
     }
 
     unsigned long out_buf_len = sizeof(IP_ADAPTER_INFO);
 
     if (GetAdaptersInfo(adapter_info, &out_buf_len) == ERROR_BUFFER_OVERFLOW) {
-        free(adapter_info);
-        IP_ADAPTER_INFO *new_adapter_info = (IP_ADAPTER_INFO *)malloc(out_buf_len);
+        mem_delete(mem, adapter_info);
+        IP_ADAPTER_INFO *new_adapter_info = (IP_ADAPTER_INFO *)mem_balloc(mem, out_buf_len);
 
         if (new_adapter_info == nullptr) {
-            free(broadcast);
+            mem_delete(mem, broadcast);
             return nullptr;
         }
 
@@ -113,7 +115,7 @@ static Broadcast_Info *fetch_broadcast_info(const Network *ns)
     }
 
     if (adapter_info != nullptr) {
-        free(adapter_info);
+        mem_delete(mem, adapter_info);
     }
 
     return broadcast;
@@ -121,14 +123,17 @@ static Broadcast_Info *fetch_broadcast_info(const Network *ns)
 
 #elif !defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) && (defined(__linux__) || defined(__FreeBSD__) || defined(__DragonFly__))
 
-non_null()
-static Broadcast_Info *fetch_broadcast_info(const Network *ns)
+static bool ip4_is_local(const IP4 *_Nonnull ip4);
+
+static Broadcast_Info *fetch_broadcast_info(const Memory *_Nonnull mem, const Network *_Nonnull ns)
 {
-    Broadcast_Info *broadcast = (Broadcast_Info *)calloc(1, sizeof(Broadcast_Info));
+    Broadcast_Info *broadcast = (Broadcast_Info *)mem_alloc(mem, sizeof(Broadcast_Info));
 
     if (broadcast == nullptr) {
         return nullptr;
     }
+
+    broadcast->mem = mem;
 
     /* Not sure how many platforms this will run on,
      * so it's wrapped in `__linux__` for now.
@@ -137,7 +142,7 @@ static Broadcast_Info *fetch_broadcast_info(const Network *ns)
     const Socket sock = net_socket(ns, net_family_ipv4(), TOX_SOCK_STREAM, 0);
 
     if (!sock_valid(sock)) {
-        free(broadcast);
+        mem_delete(mem, broadcast);
         return nullptr;
     }
 
@@ -150,7 +155,7 @@ static Broadcast_Info *fetch_broadcast_info(const Network *ns)
 
     if (ioctl(net_socket_to_native(sock), SIOCGIFCONF, &ifc) < 0) {
         kill_sock(ns, sock);
-        free(broadcast);
+        mem_delete(mem, broadcast);
         return nullptr;
     }
 
@@ -162,7 +167,8 @@ static Broadcast_Info *fetch_broadcast_info(const Network *ns)
     const int n = ifc.ifc_len / sizeof(struct ifreq);
 
     for (int i = 0; i < n; ++i) {
-        /* there are interfaces with are incapable of broadcast */
+        /* there are interfaces with are incapable of broadcast
+         * on Linux, `lo` has no broadcast address, but this function returns `>=0` */
         if (ioctl(net_socket_to_native(sock), SIOCGIFBRDADDR, &i_faces[i]) < 0) {
             continue;
         }
@@ -172,7 +178,7 @@ static Broadcast_Info *fetch_broadcast_info(const Network *ns)
             continue;
         }
 
-        const struct sockaddr_in *sock4 = (const struct sockaddr_in *)(void *)&i_faces[i].ifr_broadaddr;
+        const struct sockaddr_in *broadaddr4 = (const struct sockaddr_in *)(void *)&i_faces[i].ifr_broadaddr;
 
         if (broadcast->count >= MAX_INTERFACES) {
             break;
@@ -180,10 +186,27 @@ static Broadcast_Info *fetch_broadcast_info(const Network *ns)
 
         IP *ip = &broadcast->ips[broadcast->count];
         ip->family = net_family_ipv4();
-        ip->ip.v4.uint32 = sock4->sin_addr.s_addr;
+        ip->ip.v4.uint32 = broadaddr4->sin_addr.s_addr;
 
+        // if no broadcast address
         if (ip->ip.v4.uint32 == 0) {
-            continue;
+            if (ioctl(net_socket_to_native(sock), SIOCGIFADDR, &i_faces[i]) < 0) {
+                continue;
+            }
+
+            const struct sockaddr_in *addr4 = (const struct sockaddr_in *)(void *)&i_faces[i].ifr_addr;
+
+
+            IP4 ip4_staging;
+            ip4_staging.uint32 = addr4->sin_addr.s_addr;
+
+            if (ip4_is_local(&ip4_staging)) {
+                // this is 127.x.x.x
+                ip->ip.v4.uint32 = ip4_staging.uint32;
+            } else {
+                // give up.
+                continue;
+            }
         }
 
         ++broadcast->count;
@@ -196,22 +219,28 @@ static Broadcast_Info *fetch_broadcast_info(const Network *ns)
 
 #else // TODO(irungentoo): Other platforms?
 
-non_null()
-static Broadcast_Info *fetch_broadcast_info(const Network *ns)
+static Broadcast_Info *fetch_broadcast_info(const Memory *_Nonnull mem, const Network *_Nonnull ns)
 {
-    return (Broadcast_Info *)calloc(1, sizeof(Broadcast_Info));
+    Broadcast_Info *broadcast = (Broadcast_Info *)mem_alloc(mem, sizeof(Broadcast_Info));
+
+    if (broadcast == nullptr) {
+        return nullptr;
+    }
+
+    broadcast->mem = mem;
+
+    return broadcast;
 }
 
 #endif /* platforms */
 
-/** @brief Send packet to all IPv4 broadcast addresses
+/**
+ * @brief Send packet to all IPv4 broadcast addresses
  *
  * @retval true if sent to at least one broadcast target.
  * @retval false on failure to find any valid broadcast target.
  */
-non_null()
-static bool send_broadcasts(const Networking_Core *net, const Broadcast_Info *broadcast, uint16_t port,
-                            const uint8_t *data, uint16_t length)
+static bool send_broadcasts(const Networking_Core *_Nonnull net, const Broadcast_Info *_Nonnull broadcast, uint16_t port, const uint8_t *_Nonnull data, uint16_t length)
 {
     if (broadcast->count == 0) {
         return false;
@@ -254,8 +283,7 @@ static IP broadcast_ip(Family family_socket, Family family_broadcast)
     return ip;
 }
 
-non_null()
-static bool ip4_is_local(const IP4 *ip4)
+static bool ip4_is_local(const IP4 *_Nonnull ip4)
 {
     /* Loopback. */
     return ip4->uint8[0] == 127;
@@ -281,8 +309,7 @@ bool ip_is_local(const IP *ip)
     return ip->ip.v6.uint64[0] == 0 && ip->ip.v6.uint32[2] == 0 && ip->ip.v6.uint32[3] == net_htonl(1);
 }
 
-non_null()
-static bool ip4_is_lan(const IP4 *ip4)
+static bool ip4_is_lan(const IP4 *_Nonnull ip4)
 {
     /* 10.0.0.0 to 10.255.255.255 range. */
     if (ip4->uint8[0] == 10) {
@@ -375,12 +402,16 @@ bool lan_discovery_send(const Networking_Core *net, const Broadcast_Info *broadc
     return res;
 }
 
-Broadcast_Info *lan_discovery_init(const Network *ns)
+Broadcast_Info *lan_discovery_init(const Memory *mem, const Network *ns)
 {
-    return fetch_broadcast_info(ns);
+    return fetch_broadcast_info(mem, ns);
 }
 
 void lan_discovery_kill(Broadcast_Info *broadcast)
 {
-    free(broadcast);
+    if (broadcast == nullptr) {
+        return;
+    }
+
+    mem_delete(broadcast->mem, broadcast);
 }

@@ -1,11 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2023-2024 The TokTok team.
+ * Copyright © 2023-2026 The TokTok team.
  */
 
 #include "events_alloc.h"
 
 #include <assert.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "../attributes.h"
@@ -14,6 +13,7 @@
 #include "../ccompat.h"
 #include "../mem.h"
 #include "../tox.h"
+#include "../tox_event.h"
 #include "../tox_events.h"
 
 /*****************************************************
@@ -29,9 +29,7 @@ struct Tox_Event_Group_Topic {
     uint32_t topic_length;
 };
 
-non_null()
-static void tox_event_group_topic_set_group_number(Tox_Event_Group_Topic *group_topic,
-        uint32_t group_number)
+static void tox_event_group_topic_set_group_number(Tox_Event_Group_Topic *_Nonnull group_topic, uint32_t group_number)
 {
     assert(group_topic != nullptr);
     group_topic->group_number = group_number;
@@ -42,9 +40,7 @@ uint32_t tox_event_group_topic_get_group_number(const Tox_Event_Group_Topic *gro
     return group_topic->group_number;
 }
 
-non_null()
-static void tox_event_group_topic_set_peer_id(Tox_Event_Group_Topic *group_topic,
-        uint32_t peer_id)
+static void tox_event_group_topic_set_peer_id(Tox_Event_Group_Topic *_Nonnull group_topic, uint32_t peer_id)
 {
     assert(group_topic != nullptr);
     group_topic->peer_id = peer_id;
@@ -55,14 +51,12 @@ uint32_t tox_event_group_topic_get_peer_id(const Tox_Event_Group_Topic *group_to
     return group_topic->peer_id;
 }
 
-non_null(1) nullable(2)
-static bool tox_event_group_topic_set_topic(Tox_Event_Group_Topic *group_topic,
-        const uint8_t *topic, uint32_t topic_length)
+static bool tox_event_group_topic_set_topic(Tox_Event_Group_Topic *_Nonnull group_topic,
+        const Memory *_Nonnull mem, const uint8_t *_Nullable topic, uint32_t topic_length)
 {
     assert(group_topic != nullptr);
-
     if (group_topic->topic != nullptr) {
-        free(group_topic->topic);
+        mem_delete(mem, group_topic->topic);
         group_topic->topic = nullptr;
         group_topic->topic_length = 0;
     }
@@ -72,7 +66,7 @@ static bool tox_event_group_topic_set_topic(Tox_Event_Group_Topic *group_topic,
         return true;
     }
 
-    uint8_t *topic_copy = (uint8_t *)malloc(topic_length);
+    uint8_t *topic_copy = (uint8_t *)mem_balloc(mem, topic_length);
 
     if (topic_copy == nullptr) {
         return false;
@@ -94,17 +88,15 @@ const uint8_t *tox_event_group_topic_get_topic(const Tox_Event_Group_Topic *grou
     return group_topic->topic;
 }
 
-non_null()
-static void tox_event_group_topic_construct(Tox_Event_Group_Topic *group_topic)
+static void tox_event_group_topic_construct(Tox_Event_Group_Topic *_Nonnull group_topic)
 {
     *group_topic = (Tox_Event_Group_Topic) {
         0
     };
 }
-non_null()
-static void tox_event_group_topic_destruct(Tox_Event_Group_Topic *group_topic, const Memory *mem)
+static void tox_event_group_topic_destruct(Tox_Event_Group_Topic *_Nonnull group_topic, const Memory *_Nonnull mem)
 {
-    free(group_topic->topic);
+    mem_delete(mem, group_topic->topic);
 }
 
 bool tox_event_group_topic_pack(
@@ -116,9 +108,7 @@ bool tox_event_group_topic_pack(
            && bin_pack_bin(bp, event->topic, event->topic_length);
 }
 
-non_null()
-static bool tox_event_group_topic_unpack_into(
-    Tox_Event_Group_Topic *event, Bin_Unpack *bu)
+static bool tox_event_group_topic_unpack_into(Tox_Event_Group_Topic *_Nonnull event, Bin_Unpack *_Nonnull bu)
 {
     assert(event != nullptr);
     if (!bin_unpack_array_fixed(bu, 3, nullptr)) {
@@ -157,13 +147,12 @@ Tox_Event_Group_Topic *tox_event_group_topic_new(const Memory *mem)
 void tox_event_group_topic_free(Tox_Event_Group_Topic *group_topic, const Memory *mem)
 {
     if (group_topic != nullptr) {
-        tox_event_group_topic_destruct(group_topic, mem);
+        tox_event_group_topic_destruct((Tox_Event_Group_Topic * _Nonnull)group_topic, mem);
     }
     mem_delete(mem, group_topic);
 }
 
-non_null()
-static Tox_Event_Group_Topic *tox_events_add_group_topic(Tox_Events *events, const Memory *mem)
+static Tox_Event_Group_Topic *tox_events_add_group_topic(Tox_Events *_Nonnull events, const Memory *_Nonnull mem)
 {
     Tox_Event_Group_Topic *const group_topic = tox_event_group_topic_new(mem);
 
@@ -175,7 +164,10 @@ static Tox_Event_Group_Topic *tox_events_add_group_topic(Tox_Events *events, con
     event.type = TOX_EVENT_GROUP_TOPIC;
     event.data.group_topic = group_topic;
 
-    tox_events_add(events, &event);
+    if (!tox_events_add(events, &event)) {
+        tox_event_group_topic_free(group_topic, mem);
+        return nullptr;
+    }
     return group_topic;
 }
 
@@ -193,12 +185,8 @@ bool tox_event_group_topic_unpack(
     return tox_event_group_topic_unpack_into(*event, bu);
 }
 
-non_null()
-static Tox_Event_Group_Topic *tox_event_group_topic_alloc(void *user_data)
+static Tox_Event_Group_Topic *tox_event_group_topic_alloc(Tox_Events_State *_Nonnull state)
 {
-    Tox_Events_State *state = tox_events_alloc(user_data);
-    assert(state != nullptr);
-
     if (state->events == nullptr) {
         return nullptr;
     }
@@ -220,10 +208,11 @@ static Tox_Event_Group_Topic *tox_event_group_topic_alloc(void *user_data)
  *****************************************************/
 
 void tox_events_handle_group_topic(
-    Tox *tox, uint32_t group_number, uint32_t peer_id, const uint8_t *topic, size_t length,
+    Tox *tox, uint32_t group_number, uint32_t peer_id, const uint8_t *topic, size_t topic_length,
     void *user_data)
 {
-    Tox_Event_Group_Topic *group_topic = tox_event_group_topic_alloc(user_data);
+    Tox_Events_State *state = tox_events_alloc(user_data);
+    Tox_Event_Group_Topic *group_topic = tox_event_group_topic_alloc(state);
 
     if (group_topic == nullptr) {
         return;
@@ -231,5 +220,5 @@ void tox_events_handle_group_topic(
 
     tox_event_group_topic_set_group_number(group_topic, group_number);
     tox_event_group_topic_set_peer_id(group_topic, peer_id);
-    tox_event_group_topic_set_topic(group_topic, topic, length);
+    tox_event_group_topic_set_topic(group_topic, state->mem, topic, topic_length);
 }

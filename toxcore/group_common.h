@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2016-2022 The TokTok team.
+ * Copyright © 2016-2025 The TokTok team.
  */
 
 /**
@@ -20,6 +20,8 @@
 #include "logger.h"
 #include "mem.h"
 #include "mono_time.h"
+#include "net.h"
+#include "net_profile.h"
 #include "network.h"
 
 #define MAX_GC_PART_MESSAGE_SIZE 128
@@ -52,7 +54,7 @@
 #define MAX_GC_PACKET_SIZE (MAX_GC_PACKET_CHUNK_SIZE * 100)
 
 /* Max number of messages to store in the send/recv arrays */
-#define GCC_BUFFER_SIZE 8192
+#define GCC_BUFFER_SIZE 2048
 
 /** Self UDP status. Must correspond to return values from `ipport_self_copy()`. */
 typedef enum Self_UDP_Status {
@@ -84,7 +86,7 @@ typedef struct GC_PeerAddress {
 } GC_PeerAddress;
 
 typedef struct GC_Message_Array_Entry {
-    uint8_t *data;
+    uint8_t *_Nullable data;
     uint16_t data_length;
     uint8_t  packet_type;
     uint64_t message_id;
@@ -96,10 +98,10 @@ typedef struct GC_Connection {
     uint64_t send_message_id;   /* message_id of the next message we send to peer */
 
     uint16_t send_array_start;   /* send_array index of oldest item */
-    GC_Message_Array_Entry *send_array;
+    GC_Message_Array_Entry *_Nullable send_array;
 
     uint64_t received_message_id;   /* message_id of peer's last message to us */
-    GC_Message_Array_Entry *recv_array;
+    GC_Message_Array_Entry *_Nullable recv_array;
 
     uint64_t    last_chunk_id;  /* The message ID of the last packet fragment we received */
 
@@ -111,9 +113,11 @@ typedef struct GC_Connection {
     uint8_t     session_shared_key[CRYPTO_SHARED_KEY_SIZE];  /* made with our session sk and peer's session pk */
 
     int         tcp_connection_num;
+    int32_t     friend_number; /* The messenger friend number associated with this group connection. Used to discover the peer's IP/port if it wasn't available during the initial invite. */
     uint64_t    last_sent_tcp_relays_time;  /* the last time we attempted to send this peer our tcp relays */
     uint16_t    tcp_relay_share_index;
     uint64_t    last_received_direct_time;   /* the last time we received a direct UDP packet from this connection */
+    uint64_t    last_sent_direct_try_time;   /* the last time we tried sending a direct UDP packet */
     uint64_t    last_sent_ip_time;  /* the last time we sent our ip info to this peer in a ping packet */
 
     Node_format connected_tcp_relays[MAX_FRIEND_TCP_CONNECTIONS];
@@ -263,22 +267,22 @@ typedef struct GC_TopicInfo {
 } GC_TopicInfo;
 
 typedef struct GC_Chat {
-    Mono_Time       *mono_time;
-    const Logger    *log;
-    const Memory    *mem;
-    const Random    *rng;
+    Mono_Time       *_Nonnull mono_time;
+    const Logger    *_Nonnull log;
+    const Memory    *_Nonnull mem;
+    const Random    *_Nonnull rng;
 
     uint32_t        connected_tcp_relays;
     Self_UDP_Status self_udp_status;
     IP_Port         self_ip_port;
 
-    Networking_Core *net;
-    TCP_Connections *tcp_conn;
+    Networking_Core *_Nonnull net;
+    TCP_Connections *_Nonnull tcp_conn;
 
     uint64_t        last_checked_tcp_relays;
     Group_Handshake_Join_Type join_type;
 
-    GC_Peer         *group;
+    GC_Peer         *_Nullable group;
     Moderation      moderation;
 
     GC_Conn_State   connection_state;
@@ -345,59 +349,60 @@ typedef struct GC_Chat {
 typedef struct Messenger Messenger;
 #endif /* MESSENGER_DEFINED */
 
-typedef void gc_message_cb(const Messenger *m, uint32_t group_number, GC_Peer_Id peer_id, unsigned int type,
-                           const uint8_t *message, size_t length, uint32_t message_id, void *user_data);
-typedef void gc_private_message_cb(const Messenger *m, uint32_t group_number, GC_Peer_Id peer_id, unsigned int type,
-                                   const uint8_t *message, size_t length, uint32_t message_id, void *user_data);
-typedef void gc_custom_packet_cb(const Messenger *m, uint32_t group_number, GC_Peer_Id peer_id, const uint8_t *data,
-                                 size_t length, void *user_data);
-typedef void gc_custom_private_packet_cb(const Messenger *m, uint32_t group_number, GC_Peer_Id peer_id,
-        const uint8_t *data, size_t length, void *user_data);
-typedef void gc_moderation_cb(const Messenger *m, uint32_t group_number, GC_Peer_Id source_peer_number,
-                              GC_Peer_Id target_peer_number, unsigned int mod_type, void *user_data);
-typedef void gc_nick_change_cb(const Messenger *m, uint32_t group_number, GC_Peer_Id peer_id, const uint8_t *name,
-                               size_t length, void *user_data);
-typedef void gc_status_change_cb(const Messenger *m, uint32_t group_number, GC_Peer_Id peer_id, unsigned int status,
-                                 void *user_data);
-typedef void gc_topic_change_cb(const Messenger *m, uint32_t group_number, GC_Peer_Id peer_id, const uint8_t *topic,
-                                size_t length, void *user_data);
-typedef void gc_topic_lock_cb(const Messenger *m, uint32_t group_number, unsigned int topic_lock, void *user_data);
-typedef void gc_voice_state_cb(const Messenger *m, uint32_t group_number, unsigned int voice_state, void *user_data);
-typedef void gc_peer_limit_cb(const Messenger *m, uint32_t group_number, uint32_t peer_limit, void *user_data);
-typedef void gc_privacy_state_cb(const Messenger *m, uint32_t group_number, unsigned int privacy_state, void *user_data);
-typedef void gc_password_cb(const Messenger *m, uint32_t group_number, const uint8_t *password, size_t length,
-                            void *user_data);
-typedef void gc_peer_join_cb(const Messenger *m, uint32_t group_number, GC_Peer_Id peer_id, void *user_data);
-typedef void gc_peer_exit_cb(const Messenger *m, uint32_t group_number, GC_Peer_Id peer_id, unsigned int exit_type,
-                             const uint8_t *name, size_t name_length, const uint8_t *part_message, size_t length,
-                             void *user_data);
-typedef void gc_self_join_cb(const Messenger *m, uint32_t group_number, void *user_data);
-typedef void gc_rejected_cb(const Messenger *m, uint32_t group_number, unsigned int fail_type, void *user_data);
+typedef void gc_message_cb(const Messenger *_Nonnull m, uint32_t group_number, GC_Peer_Id peer_id, unsigned int type,
+                           const uint8_t *_Nonnull message, size_t length, uint32_t message_id, void *_Nullable user_data);
+typedef void gc_private_message_cb(const Messenger *_Nonnull m, uint32_t group_number, GC_Peer_Id peer_id, unsigned int type,
+                                   const uint8_t *_Nonnull message, size_t length, uint32_t message_id, void *_Nullable user_data);
+typedef void gc_custom_packet_cb(const Messenger *_Nonnull m, uint32_t group_number, GC_Peer_Id peer_id, const uint8_t *_Nonnull data,
+                                 size_t length, void *_Nullable user_data);
+typedef void gc_custom_private_packet_cb(const Messenger *_Nonnull m, uint32_t group_number, GC_Peer_Id peer_id,
+        const uint8_t *_Nonnull data, size_t length, void *_Nullable user_data);
+typedef void gc_moderation_cb(const Messenger *_Nonnull m, uint32_t group_number, GC_Peer_Id source_peer_number,
+                              GC_Peer_Id target_peer_number, unsigned int mod_type, void *_Nullable user_data);
+typedef void gc_nick_change_cb(const Messenger *_Nonnull m, uint32_t group_number, GC_Peer_Id peer_id, const uint8_t *_Nonnull name,
+                               size_t length, void *_Nullable user_data);
+typedef void gc_status_change_cb(const Messenger *_Nonnull m, uint32_t group_number, GC_Peer_Id peer_id, unsigned int status,
+                                 void *_Nullable user_data);
+typedef void gc_topic_change_cb(const Messenger *_Nonnull m, uint32_t group_number, GC_Peer_Id peer_id, const uint8_t *_Nullable topic,
+                                size_t length, void *_Nullable user_data);
+typedef void gc_topic_lock_cb(const Messenger *_Nonnull m, uint32_t group_number, unsigned int topic_lock, void *_Nullable user_data);
+typedef void gc_voice_state_cb(const Messenger *_Nonnull m, uint32_t group_number, unsigned int voice_state, void *_Nullable user_data);
+typedef void gc_peer_limit_cb(const Messenger *_Nonnull m, uint32_t group_number, uint32_t peer_limit, void *_Nullable user_data);
+typedef void gc_privacy_state_cb(const Messenger *_Nonnull m, uint32_t group_number, unsigned int privacy_state, void *_Nullable user_data);
+typedef void gc_password_cb(const Messenger *_Nonnull m, uint32_t group_number, const uint8_t *_Nullable password, size_t length,
+                            void *_Nullable user_data);
+typedef void gc_peer_join_cb(const Messenger *_Nonnull m, uint32_t group_number, GC_Peer_Id peer_id, void *_Nullable user_data);
+typedef void gc_peer_exit_cb(const Messenger *_Nonnull m, uint32_t group_number, GC_Peer_Id peer_id, unsigned int exit_type,
+                             const uint8_t *_Nullable name, size_t name_length, const uint8_t *_Nullable part_message, size_t length,
+                             void *_Nullable user_data);
+typedef void gc_self_join_cb(const Messenger *_Nonnull m, uint32_t group_number, void *_Nullable user_data);
+typedef void gc_rejected_cb(const Messenger *_Nonnull m, uint32_t group_number, unsigned int fail_type, void *_Nullable user_data);
 
 typedef struct GC_Session {
-    Messenger                 *messenger;
-    GC_Chat                   *chats;
-    struct GC_Announces_List  *announces_list;
+    Messenger                 *_Nonnull messenger;
+    GC_Chat                   *_Nullable chats;
+    Net_Profile               *_Nonnull tcp_np;
+    struct GC_Announces_List  *_Nonnull announces_list;
 
     uint32_t     chats_index;
 
-    gc_message_cb *message;
-    gc_private_message_cb *private_message;
-    gc_custom_packet_cb *custom_packet;
-    gc_custom_private_packet_cb *custom_private_packet;
-    gc_moderation_cb *moderation;
-    gc_nick_change_cb *nick_change;
-    gc_status_change_cb *status_change;
-    gc_topic_change_cb *topic_change;
-    gc_topic_lock_cb *topic_lock;
-    gc_voice_state_cb *voice_state;
-    gc_peer_limit_cb *peer_limit;
-    gc_privacy_state_cb *privacy_state;
-    gc_password_cb *password;
-    gc_peer_join_cb *peer_join;
-    gc_peer_exit_cb *peer_exit;
-    gc_self_join_cb *self_join;
-    gc_rejected_cb *rejected;
+    gc_message_cb *_Nullable message;
+    gc_private_message_cb *_Nullable private_message;
+    gc_custom_packet_cb *_Nullable custom_packet;
+    gc_custom_private_packet_cb *_Nullable custom_private_packet;
+    gc_moderation_cb *_Nullable moderation;
+    gc_nick_change_cb *_Nullable nick_change;
+    gc_status_change_cb *_Nullable status_change;
+    gc_topic_change_cb *_Nullable topic_change;
+    gc_topic_lock_cb *_Nullable topic_lock;
+    gc_voice_state_cb *_Nullable voice_state;
+    gc_peer_limit_cb *_Nullable peer_limit;
+    gc_privacy_state_cb *_Nullable privacy_state;
+    gc_password_cb *_Nullable password;
+    gc_peer_join_cb *_Nullable peer_join;
+    gc_peer_exit_cb *_Nullable peer_exit;
+    gc_self_join_cb *_Nullable self_join;
+    gc_rejected_cb *_Nullable rejected;
 } GC_Session;
 
 /** @brief Adds a new peer to group_number's peer list.
@@ -406,16 +411,13 @@ typedef struct GC_Session {
  * Return -1 on failure.
  * Return -2 if a peer with public_key is already in our peerlist.
  */
-non_null(1, 3) nullable(2)
-int peer_add(GC_Chat *chat, const IP_Port *ipp, const uint8_t *public_key);
-
+int peer_add(GC_Chat *_Nonnull chat, const IP_Port *_Nullable ipp, const uint8_t *_Nonnull public_key);
 /** @brief Unpacks saved peers from `data` of size `length` into `chat`.
  *
  * Returns the number of unpacked peers on success.
  * Returns -1 on failure.
  */
-non_null()
-int unpack_gc_saved_peers(GC_Chat *chat, const uint8_t *data, uint16_t length);
+int unpack_gc_saved_peers(GC_Chat *_Nonnull chat, const uint8_t *_Nonnull data, uint16_t length);
 
 /** @brief Packs all valid entries from saved peerlist into `data`.
  *
@@ -425,7 +427,5 @@ int unpack_gc_saved_peers(GC_Chat *chat, const uint8_t *data, uint16_t length);
  * Return the number of packed saved peers on success.
  * Return -1 if buffer is too small.
  */
-non_null(1, 2) nullable(4)
-int pack_gc_saved_peers(const GC_Chat *chat, uint8_t *data, uint16_t length, uint16_t *processed);
-
+int pack_gc_saved_peers(const GC_Chat *_Nonnull chat, uint8_t *_Nonnull data, uint16_t length, uint16_t *_Nullable processed);
 #endif /* C_TOXCORE_TOXCORE_GROUP_COMMON_H */

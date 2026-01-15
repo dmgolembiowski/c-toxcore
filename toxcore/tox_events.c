@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2022-2024 The TokTok team.
+ * Copyright © 2022-2025 The TokTok team.
  */
 
 #include "tox_events.h"
@@ -17,7 +17,7 @@
 #include "tox.h"
 #include "tox_event.h"
 #include "tox_private.h"
-#include "tox_struct.h"
+#include "tox_struct.h" // IWYU pragma: keep
 
 /*****************************************************
  *
@@ -66,7 +66,7 @@ void tox_events_init(Tox *tox)
     tox_callback_group_self_join(tox, tox_events_handle_group_self_join);
     tox_callback_group_join_fail(tox, tox_events_handle_group_join_fail);
     tox_callback_group_moderation(tox, tox_events_handle_group_moderation);
-    tox_callback_dht_get_nodes_response(tox, tox_events_handle_dht_get_nodes_response);
+    tox_callback_dht_nodes_response(tox, tox_events_handle_dht_nodes_response);
 }
 
 uint32_t tox_events_get_size(const Tox_Events *events)
@@ -74,8 +74,7 @@ uint32_t tox_events_get_size(const Tox_Events *events)
     return events == nullptr ? 0 : events->events_size;
 }
 
-nullable(1)
-static const Tox_Event *tox_events_get_events(const Tox_Events *events)
+static const Tox_Event *tox_events_get_events(const Tox_Events *_Nullable events)
 {
     return events == nullptr ? nullptr : events->events;
 }
@@ -107,16 +106,14 @@ Tox_Events *tox_events_iterate(Tox *tox, bool fail_hard, Tox_Err_Events_Iterate 
     return state.events;
 }
 
-non_null()
-static bool tox_event_pack_handler(const void *arr, uint32_t index, const Logger *logger, Bin_Pack *bp)
+static bool tox_event_pack_handler(const void *_Nonnull arr, uint32_t index, const Logger *_Nonnull logger, Bin_Pack *_Nonnull bp)
 {
     const Tox_Event *events = (const Tox_Event *)arr;
     assert(events != nullptr);
     return tox_event_pack(&events[index], bp);
 }
 
-non_null(3) nullable(1, 2)
-static bool tox_events_pack_handler(const void *obj, const Logger *logger, Bin_Pack *bp)
+static bool tox_events_pack_handler(const void *_Nullable obj, const Logger *_Nullable logger, Bin_Pack *_Nonnull bp)
 {
     const Tox_Events *events = (const Tox_Events *)obj;
     return bin_pack_obj_array(bp, tox_event_pack_handler, tox_events_get_events(events), tox_events_get_size(events), logger);
@@ -132,8 +129,7 @@ bool tox_events_get_bytes(const Tox_Events *events, uint8_t *bytes)
     return bin_pack_obj(tox_events_pack_handler, events, nullptr, bytes, UINT32_MAX);
 }
 
-non_null()
-static bool tox_events_unpack_handler(void *obj, Bin_Unpack *bu)
+static bool tox_events_unpack_handler(void *_Nonnull obj, Bin_Unpack *_Nonnull bu)
 {
     Tox_Events *events = (Tox_Events *)obj;
 
@@ -173,7 +169,7 @@ Tox_Events *tox_events_load(const Tox_System *sys, const uint8_t *bytes, uint32_
     };
     events->mem = sys->mem;
 
-    if (!bin_unpack_obj(tox_events_unpack_handler, events, bytes, bytes_size)) {
+    if (!bin_unpack_obj(sys->mem, tox_events_unpack_handler, events, bytes, bytes_size)) {
         tox_events_free(events);
         return nullptr;
     }

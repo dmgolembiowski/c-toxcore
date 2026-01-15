@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2016-2018 The TokTok team.
+ * Copyright © 2016-2025 The TokTok team.
  * Copyright © 2014 Tox project.
  */
 
@@ -12,11 +12,11 @@
 
 #include <assert.h>
 #include <stdbool.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "attributes.h"
 #include "ccompat.h"
+#include "mem.h"
 
 /**
  * Basically, the elements in the list are placed in order so that they can be searched for easily
@@ -41,8 +41,7 @@ static int32_t list_index(uint32_t i)
  * @retval <0  no match, returns index (return value is `list_index(index)`) where
  *   the data should be inserted
  */
-non_null()
-static int find(const BS_List *list, const uint8_t *data)
+static int find(const BS_List *_Nonnull list, const uint8_t *_Nonnull data)
 {
     // should work well, but could be improved
     if (list->n == 0) {
@@ -107,15 +106,14 @@ static int find(const BS_List *list, const uint8_t *data)
  *
  * @return true on success.
  */
-non_null()
-static bool resize(BS_List *list, uint32_t new_size)
+static bool resize(BS_List *_Nonnull list, uint32_t new_size)
 {
     if (new_size == 0) {
         bs_list_free(list);
         return true;
     }
 
-    uint8_t *data = (uint8_t *)realloc(list->data, list->element_size * new_size);
+    uint8_t *data = (uint8_t *)mem_brealloc(list->mem, list->data, new_size * list->element_size);
 
     if (data == nullptr) {
         return false;
@@ -123,7 +121,7 @@ static bool resize(BS_List *list, uint32_t new_size)
 
     list->data = data;
 
-    int *ids = (int *)realloc(list->ids, new_size * sizeof(int));
+    int *ids = (int *)mem_vrealloc(list->mem, list->ids, new_size, sizeof(int));
 
     if (ids == nullptr) {
         return false;
@@ -134,8 +132,10 @@ static bool resize(BS_List *list, uint32_t new_size)
     return true;
 }
 
-int bs_list_init(BS_List *list, uint32_t element_size, uint32_t initial_capacity, bs_list_cmp_cb *cmp_callback)
+int bs_list_init(BS_List *list, const Memory *mem, uint32_t element_size, uint32_t initial_capacity, bs_list_cmp_cb *cmp_callback)
 {
+    list->mem = mem;
+
     // set initial values
     list->n = 0;
     list->element_size = element_size;
@@ -162,10 +162,10 @@ void bs_list_free(BS_List *list)
     }
 
     // free both arrays
-    free(list->data);
+    mem_delete(list->mem, list->data);
     list->data = nullptr;
 
-    free(list->ids);
+    mem_delete(list->mem, list->ids);
     list->ids = nullptr;
 }
 

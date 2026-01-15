@@ -4,9 +4,13 @@
 
 #include "../../toxcore/tox.h"
 #include "../../toxcore/tox_private.h"
-#include "fuzz_support.hh"
+#include "../support/public/fuzz_data.hh"
+#include "../support/public/simulated_environment.hh"
 
 namespace {
+
+using tox::test::Fuzz_Data;
+using tox::test::SimulatedEnvironment;
 
 void TestSaveDataLoading(Fuzz_Data &input)
 {
@@ -20,14 +24,19 @@ void TestSaveDataLoading(Fuzz_Data &input)
     const size_t savedata_size = input.size();
     CONSUME_OR_RETURN(const uint8_t *savedata, input, savedata_size);
 
-    Null_System sys;
-    tox_options_set_operating_system(tox_options, sys.sys.get());
+    tox_options_set_experimental_groups_persistence(tox_options, true);
 
     // pass test data to Tox
     tox_options_set_savedata_data(tox_options, savedata, savedata_size);
     tox_options_set_savedata_type(tox_options, TOX_SAVEDATA_TYPE_TOX_SAVE);
 
-    Tox *tox = tox_new(tox_options, nullptr);
+    Tox_Options_Testing tox_options_testing;
+    SimulatedEnvironment env;
+    auto node = env.create_node(33445);
+    tox_options_testing.operating_system = &node->system;
+
+    Tox_Err_New_Testing err_testing;
+    Tox *tox = tox_new_testing(tox_options, nullptr, &tox_options_testing, &err_testing);
     tox_options_free(tox_options);
     if (tox == nullptr) {
         // Tox save was invalid, we're finished here

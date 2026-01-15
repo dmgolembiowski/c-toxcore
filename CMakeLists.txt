@@ -44,7 +44,7 @@ set_source_files_properties(
 # versions in a synchronised way.
 set(PROJECT_VERSION_MAJOR "0")
 set(PROJECT_VERSION_MINOR "2")
-set(PROJECT_VERSION_PATCH "18")
+set(PROJECT_VERSION_PATCH "21")
 set(PROJECT_VERSION "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}")
 
 # set .so library version / following libtool scheme
@@ -77,6 +77,7 @@ endif()
 
 enable_testing()
 find_package(GTest)
+find_package(benchmark QUIET)
 
 set(CMAKE_MACOSX_RPATH ON)
 
@@ -87,7 +88,7 @@ if(MSVC AND MSVC_TOOLSET_VERSION LESS 143)
 else()
   set(CMAKE_C_STANDARD 11)
 endif()
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -146,6 +147,8 @@ endif()
 option(BUILD_MISC_TESTS "Build additional tests" OFF)
 option(BUILD_FUN_UTILS "Build additional just for fun utilities" OFF)
 
+option(UNITTEST "Enable unit tests (disable if you don't have a working gmock or gtest)" ON)
+
 option(AUTOTEST "Enable autotests (mainly for CI)" OFF)
 if(AUTOTEST)
   option(NON_HERMETIC_TESTS "Whether to build and run tests that depend on an internet connection" OFF)
@@ -159,7 +162,7 @@ option(DHT_BOOTSTRAP "Enable building of DHT_bootstrap" ON)
 option(BOOTSTRAP_DAEMON "Enable building of tox-bootstrapd" ON)
 if(BOOTSTRAP_DAEMON AND WIN32)
   message(WARNING "Building tox-bootstrapd for Windows is not supported, disabling")
-  set(BOOTSTRAP_DAEMON OFF)
+  set(BOOTSTRAP_DAEMON OFF CACHE BOOL "" FORCE)
 endif()
 
 option(BUILD_FUZZ_TESTS "Build fuzzing harnesses" OFF)
@@ -175,6 +178,7 @@ include(Dependencies)
 
 if(MUST_BUILD_TOXAV)
   set(NO_TOXAV_ERROR_TYPE SEND_ERROR)
+  set(BUILD_TOXAV ON CACHE BOOL "" FORCE)
 else()
   set(NO_TOXAV_ERROR_TYPE WARNING)
 endif()
@@ -182,17 +186,23 @@ endif()
 if(BUILD_TOXAV)
   if(NOT OPUS_FOUND)
     message(${NO_TOXAV_ERROR_TYPE} "Option BUILD_TOXAV is enabled but required library OPUS was not found.")
-    set(BUILD_TOXAV OFF)
+    set(BUILD_TOXAV OFF CACHE BOOL "" FORCE)
   endif()
   if(NOT VPX_FOUND)
     message(${NO_TOXAV_ERROR_TYPE} "Option BUILD_TOXAV is enabled but required library VPX was not found.")
-    set(BUILD_TOXAV OFF)
+    set(BUILD_TOXAV OFF CACHE BOOL "" FORCE)
   endif()
 endif()
 
 # Disable float/double packing in CMP (C MessagePack library).
 # We don't transfer floats over the network, so we disable this functionality.
 add_definitions(-DCMP_NO_FLOAT=1)
+
+# TODO(iphydf): Check whether this is actually true.
+option(USE_LIBEV "Whether to use libev for tox_loop" OFF)
+if(USE_LIBEV)
+  add_definitions(-DHAVE_LIBEV=1)
+endif()
 
 ################################################################################
 #
@@ -235,7 +245,7 @@ set(toxcore_SOURCES
   toxcore/events/conference_peer_list_changed.c
   toxcore/events/conference_peer_name.c
   toxcore/events/conference_title.c
-  toxcore/events/dht_get_nodes_response.c
+  toxcore/events/dht_nodes_response.c
   toxcore/events/events_alloc.c
   toxcore/events/events_alloc.h
   toxcore/events/file_chunk_request.c
@@ -304,8 +314,14 @@ set(toxcore_SOURCES
   toxcore/mem.h
   toxcore/mono_time.c
   toxcore/mono_time.h
+  toxcore/net.c
+  toxcore/net.h
   toxcore/net_crypto.c
   toxcore/net_crypto.h
+  toxcore/net_log.c
+  toxcore/net_log.h
+  toxcore/net_profile.c
+  toxcore/net_profile.h
   toxcore/network.c
   toxcore/network.h
   toxcore/onion_announce.c
@@ -314,12 +330,22 @@ set(toxcore_SOURCES
   toxcore/onion_client.c
   toxcore/onion_client.h
   toxcore/onion.h
+  toxcore/os_memory.c
+  toxcore/os_memory.h
+  toxcore/os_network.c
+  toxcore/os_network.h
+  toxcore/os_random.c
+  toxcore/os_random.h
   toxcore/ping_array.c
   toxcore/ping_array.h
   toxcore/ping.c
   toxcore/ping.h
+  toxcore/rng.c
+  toxcore/rng.h
   toxcore/shared_key_cache.c
   toxcore/shared_key_cache.h
+  toxcore/sort.c
+  toxcore/sort.h
   toxcore/state.c
   toxcore/state.h
   toxcore/TCP_client.c
@@ -333,14 +359,19 @@ set(toxcore_SOURCES
   toxcore/timed_auth.c
   toxcore/timed_auth.h
   toxcore/tox_api.c
+  toxcore/tox_attributes.h
   toxcore/tox.c
+  toxcore/tox.h
   toxcore/tox_dispatch.c
   toxcore/tox_dispatch.h
   toxcore/tox_event.c
   toxcore/tox_event.h
   toxcore/tox_events.c
   toxcore/tox_events.h
-  toxcore/tox.h
+  toxcore/tox_log_level.c
+  toxcore/tox_log_level.h
+  toxcore/tox_options.c
+  toxcore/tox_options.h
   toxcore/tox_private.c
   toxcore/tox_private.h
   toxcore/tox_pack.c
@@ -349,7 +380,9 @@ set(toxcore_SOURCES
   toxcore/tox_unpack.h
   toxcore/util.c
   toxcore/util.h)
-if(TARGET unofficial-sodium::sodium)
+if(TARGET libsodium::libsodium)
+  set(toxcore_LINK_LIBRARIES ${toxcore_LINK_LIBRARIES} libsodium::libsodium)
+elseif(TARGET unofficial-sodium::sodium)
   set(toxcore_LINK_LIBRARIES ${toxcore_LINK_LIBRARIES} unofficial-sodium::sodium)
 else()
   set(toxcore_LINK_LIBRARIES ${toxcore_LINK_LIBRARIES} ${LIBSODIUM_LIBRARIES})
@@ -360,10 +393,13 @@ endif()
 set(toxcore_PKGCONFIG_REQUIRES ${toxcore_PKGCONFIG_REQUIRES} libsodium)
 set(toxcore_API_HEADERS
   ${toxcore_SOURCE_DIR}/toxcore/tox.h^tox
-  ${toxcore_SOURCE_DIR}/toxcore/tox_events.h^tox
-  ${toxcore_SOURCE_DIR}/toxcore/tox_dispatch.h^tox)
+  ${toxcore_SOURCE_DIR}/toxcore/tox_log_level.h^tox
+  ${toxcore_SOURCE_DIR}/toxcore/tox_options.h^tox)
 if(EXPERIMENTAL_API)
   set(toxcore_API_HEADERS ${toxcore_API_HEADERS}
+    ${toxcore_SOURCE_DIR}/toxcore/tox_attributes.h^tox
+    ${toxcore_SOURCE_DIR}/toxcore/tox_dispatch.h^tox
+    ${toxcore_SOURCE_DIR}/toxcore/tox_events.h^tox
     ${toxcore_SOURCE_DIR}/toxcore/tox_private.h^tox)
 endif()
 
@@ -395,7 +431,9 @@ if(BUILD_TOXAV)
   set(toxcore_API_HEADERS ${toxcore_API_HEADERS}
     ${toxcore_SOURCE_DIR}/toxav/toxav.h^toxav)
 
-  if(MSVC)
+  if(TARGET Opus::opus AND TARGET libvpx::libvpx)
+    set(toxcore_LINK_LIBRARIES ${toxcore_LINK_LIBRARIES} Opus::opus libvpx::libvpx)
+  elseif(TARGET PkgConfig::OPUS AND TARGET PkgConfig::VPX)
     set(toxcore_LINK_LIBRARIES ${toxcore_LINK_LIBRARIES} PkgConfig::OPUS PkgConfig::VPX)
   else()
     set(toxcore_LINK_LIBRARIES ${toxcore_LINK_LIBRARIES} ${OPUS_LIBRARIES} ${VPX_LIBRARIES})
@@ -448,7 +486,9 @@ if(SOCKET_LIBRARIES)
   set(toxcore_PKGCONFIG_LIBS ${toxcore_PKGCONFIG_LIBS} -lsocket)
 endif()
 
-if(TARGET PThreads4W::PThreads4W)
+if(TARGET pthreads4w::pthreads4w)
+  set(toxcore_LINK_LIBRARIES ${toxcore_LINK_LIBRARIES} pthreads4w::pthreads4w)
+elseif(TARGET PThreads4W::PThreads4W)
   set(toxcore_LINK_LIBRARIES ${toxcore_LINK_LIBRARIES} PThreads4W::PThreads4W)
 elseif(TARGET Threads::Threads)
   set(toxcore_LINK_LIBRARIES ${toxcore_LINK_LIBRARIES} Threads::Threads)
@@ -500,43 +540,73 @@ make_version_script(toxcore ${toxcore_API_HEADERS})
 # "${CMAKE_INSTALL_INCLUDEDIR}/tox".
 install_module(toxcore DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tox)
 
+add_subdirectory(testing)
+
 ################################################################################
 #
 # :: Unit tests: no networking, just pure function calls.
 #
 ################################################################################
 
-add_library(test_util STATIC
-  toxcore/DHT_test_util.cc
-  toxcore/DHT_test_util.hh
-  toxcore/crypto_core_test_util.cc
-  toxcore/crypto_core_test_util.hh
-  toxcore/mem_test_util.cc
-  toxcore/mem_test_util.hh
-  toxcore/network_test_util.cc
-  toxcore/network_test_util.hh
-  toxcore/test_util.cc
-  toxcore/test_util.hh)
+if(UNITTEST)
+  add_library(test_util STATIC
+    toxcore/DHT_test_util.cc
+    toxcore/DHT_test_util.hh
+    toxcore/crypto_core_test_util.cc
+    toxcore/crypto_core_test_util.hh
+    toxcore/mono_time_test_util.cc
+    toxcore/mono_time_test_util.hh
+    toxcore/network_test_util.cc
+    toxcore/network_test_util.hh
+    toxcore/test_util.cc
+    toxcore/test_util.hh)
+endif()
 
 function(unit_test subdir target)
   add_executable(unit_${target}_test ${subdir}/${target}_test.cc)
-  target_link_libraries(unit_${target}_test PRIVATE test_util)
+  target_link_libraries(unit_${target}_test PRIVATE test_util support)
   if(TARGET toxcore_static)
     target_link_libraries(unit_${target}_test PRIVATE toxcore_static)
   else()
     target_link_libraries(unit_${target}_test PRIVATE toxcore_shared)
   endif()
+  if(TARGET pthreads4w::pthreads4w)
+    target_link_libraries(unit_${target}_test PRIVATE pthreads4w::pthreads4w)
+  elseif(TARGET PThreads4W::PThreads4W)
+    target_link_libraries(unit_${target}_test PRIVATE PThreads4W::PThreads4W)
+  elseif(TARGET Threads::Threads)
+    target_link_libraries(unit_${target}_test PRIVATE Threads::Threads)
+  endif()
   target_link_libraries(unit_${target}_test PRIVATE GTest::gtest GTest::gtest_main GTest::gmock)
   set_target_properties(unit_${target}_test PROPERTIES COMPILE_FLAGS "${TEST_CXX_FLAGS}")
-  add_test(NAME ${target} COMMAND ${CROSSCOMPILING_EMULATOR} unit_${target}_test)
+  add_test(NAME ${target} COMMAND unit_${target}_test)
   set_property(TEST ${target} PROPERTY ENVIRONMENT "LLVM_PROFILE_FILE=${target}.profraw")
 endfunction()
 
 # The actual unit tests follow.
 #
-if(TARGET GTest::gtest AND TARGET GTest::gmock)
-  unit_test(toxav ring_buffer)
-  unit_test(toxav rtp)
+if(UNITTEST AND TARGET GTest::gtest AND TARGET GTest::gmock)
+  if(BUILD_TOXAV)
+    add_library(av_test_support STATIC
+      toxav/av_test_support.cc
+      toxav/av_test_support.hh)
+    if(TARGET toxcore_static)
+      target_link_libraries(av_test_support PRIVATE toxcore_static)
+    else()
+      target_link_libraries(av_test_support PRIVATE toxcore_shared)
+    endif()
+    target_link_libraries(av_test_support PRIVATE GTest::gtest)
+
+    unit_test(toxav audio)
+    target_link_libraries(unit_audio_test PRIVATE av_test_support)
+    unit_test(toxav bwcontroller)
+    unit_test(toxav msi)
+    unit_test(toxav ring_buffer)
+    unit_test(toxav rtp)
+    unit_test(toxav video)
+    target_link_libraries(unit_video_test PRIVATE av_test_support)
+  endif()
+
   unit_test(toxcore DHT)
   unit_test(toxcore bin_pack)
   unit_test(toxcore crypto_core)
@@ -546,12 +616,11 @@ if(TARGET GTest::gtest AND TARGET GTest::gmock)
   unit_test(toxcore mem)
   unit_test(toxcore mono_time)
   unit_test(toxcore ping_array)
+  unit_test(toxcore shared_key_cache)
   unit_test(toxcore test_util)
   unit_test(toxcore tox)
   unit_test(toxcore util)
 endif()
-
-add_subdirectory(testing)
 
 ################################################################################
 #
@@ -579,10 +648,14 @@ if(DHT_BOOTSTRAP)
     target_link_libraries(DHT_bootstrap PRIVATE toxcore_shared)
   endif()
   target_link_libraries(DHT_bootstrap PRIVATE misc_tools)
-  if(TARGET unofficial-sodium::sodium)
+  if(TARGET libsodium::libsodium)
+    target_link_libraries(DHT_bootstrap PRIVATE libsodium::libsodium)
+  elseif(TARGET unofficial-sodium::sodium)
     target_link_libraries(DHT_bootstrap PRIVATE unofficial-sodium::sodium)
   endif()
-  if(TARGET PThreads4W::PThreads4W)
+  if(TARGET pthreads4w::pthreads4w)
+    target_link_libraries(DHT_bootstrap PRIVATE pthreads4w::pthreads4w)
+  elseif(TARGET PThreads4W::PThreads4W)
     target_link_libraries(DHT_bootstrap PRIVATE PThreads4W::PThreads4W)
   elseif(TARGET Threads::Threads)
     target_link_libraries(DHT_bootstrap PRIVATE Threads::Threads)
@@ -595,7 +668,7 @@ if(BOOTSTRAP_DAEMON)
     add_subdirectory(other/bootstrap_daemon)
   else()
     message(WARNING "Option BOOTSTRAP_DAEMON is enabled but required library LIBCONFIG was not found.")
-    set(BOOTSTRAP_DAEMON OFF)
+    set(BOOTSTRAP_DAEMON OFF CACHE BOOL "" FORCE)
   endif()
 endif()
 
@@ -605,4 +678,45 @@ endif()
 
 if (BUILD_FUZZ_TESTS)
   add_subdirectory(testing/fuzzing)
+endif()
+
+################################################################################
+#
+# :: Benchmarks
+#
+################################################################################
+
+if(UNITTEST AND benchmark_FOUND)
+  if(BUILD_TOXAV AND TARGET av_test_support)
+    add_executable(rtp_bench toxav/rtp_bench.cc)
+    target_link_libraries(rtp_bench PRIVATE
+      toxcore_static
+      av_test_support
+      benchmark::benchmark
+    )
+
+    add_executable(audio_bench toxav/audio_bench.cc)
+    target_link_libraries(audio_bench PRIVATE
+      toxcore_static
+      av_test_support
+      benchmark::benchmark
+    )
+
+    add_executable(video_bench toxav/video_bench.cc)
+    target_link_libraries(video_bench PRIVATE
+      toxcore_static
+      av_test_support
+      benchmark::benchmark
+    )
+  endif()
+
+  add_executable(sort_bench
+    toxcore/sort_bench.cc
+    toxcore/sort_test_util.cc
+    toxcore/sort_test_util.hh
+  )
+  target_link_libraries(sort_bench PRIVATE
+    toxcore_static
+    benchmark::benchmark
+  )
 endif()

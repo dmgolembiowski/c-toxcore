@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2023-2024 The TokTok team.
+ * Copyright © 2023-2026 The TokTok team.
  */
 
 #include "events_alloc.h"
@@ -12,6 +12,7 @@
 #include "../ccompat.h"
 #include "../mem.h"
 #include "../tox.h"
+#include "../tox_event.h"
 #include "../tox_events.h"
 #include "../tox_pack.h"
 #include "../tox_unpack.h"
@@ -29,9 +30,7 @@ struct Tox_Event_Group_Moderation {
     Tox_Group_Mod_Event mod_type;
 };
 
-non_null()
-static void tox_event_group_moderation_set_group_number(Tox_Event_Group_Moderation *group_moderation,
-        uint32_t group_number)
+static void tox_event_group_moderation_set_group_number(Tox_Event_Group_Moderation *_Nonnull group_moderation, uint32_t group_number)
 {
     assert(group_moderation != nullptr);
     group_moderation->group_number = group_number;
@@ -42,9 +41,7 @@ uint32_t tox_event_group_moderation_get_group_number(const Tox_Event_Group_Moder
     return group_moderation->group_number;
 }
 
-non_null()
-static void tox_event_group_moderation_set_source_peer_id(Tox_Event_Group_Moderation *group_moderation,
-        uint32_t source_peer_id)
+static void tox_event_group_moderation_set_source_peer_id(Tox_Event_Group_Moderation *_Nonnull group_moderation, uint32_t source_peer_id)
 {
     assert(group_moderation != nullptr);
     group_moderation->source_peer_id = source_peer_id;
@@ -55,9 +52,7 @@ uint32_t tox_event_group_moderation_get_source_peer_id(const Tox_Event_Group_Mod
     return group_moderation->source_peer_id;
 }
 
-non_null()
-static void tox_event_group_moderation_set_target_peer_id(Tox_Event_Group_Moderation *group_moderation,
-        uint32_t target_peer_id)
+static void tox_event_group_moderation_set_target_peer_id(Tox_Event_Group_Moderation *_Nonnull group_moderation, uint32_t target_peer_id)
 {
     assert(group_moderation != nullptr);
     group_moderation->target_peer_id = target_peer_id;
@@ -68,9 +63,7 @@ uint32_t tox_event_group_moderation_get_target_peer_id(const Tox_Event_Group_Mod
     return group_moderation->target_peer_id;
 }
 
-non_null()
-static void tox_event_group_moderation_set_mod_type(Tox_Event_Group_Moderation *group_moderation,
-        Tox_Group_Mod_Event mod_type)
+static void tox_event_group_moderation_set_mod_type(Tox_Event_Group_Moderation *_Nonnull group_moderation, Tox_Group_Mod_Event mod_type)
 {
     assert(group_moderation != nullptr);
     group_moderation->mod_type = mod_type;
@@ -81,15 +74,13 @@ Tox_Group_Mod_Event tox_event_group_moderation_get_mod_type(const Tox_Event_Grou
     return group_moderation->mod_type;
 }
 
-non_null()
-static void tox_event_group_moderation_construct(Tox_Event_Group_Moderation *group_moderation)
+static void tox_event_group_moderation_construct(Tox_Event_Group_Moderation *_Nonnull group_moderation)
 {
     *group_moderation = (Tox_Event_Group_Moderation) {
         0
     };
 }
-non_null()
-static void tox_event_group_moderation_destruct(Tox_Event_Group_Moderation *group_moderation, const Memory *mem)
+static void tox_event_group_moderation_destruct(Tox_Event_Group_Moderation *_Nonnull group_moderation, const Memory *_Nonnull mem)
 {
     return;
 }
@@ -104,9 +95,7 @@ bool tox_event_group_moderation_pack(
            && tox_group_mod_event_pack(event->mod_type, bp);
 }
 
-non_null()
-static bool tox_event_group_moderation_unpack_into(
-    Tox_Event_Group_Moderation *event, Bin_Unpack *bu)
+static bool tox_event_group_moderation_unpack_into(Tox_Event_Group_Moderation *_Nonnull event, Bin_Unpack *_Nonnull bu)
 {
     assert(event != nullptr);
     if (!bin_unpack_array_fixed(bu, 4, nullptr)) {
@@ -146,13 +135,12 @@ Tox_Event_Group_Moderation *tox_event_group_moderation_new(const Memory *mem)
 void tox_event_group_moderation_free(Tox_Event_Group_Moderation *group_moderation, const Memory *mem)
 {
     if (group_moderation != nullptr) {
-        tox_event_group_moderation_destruct(group_moderation, mem);
+        tox_event_group_moderation_destruct((Tox_Event_Group_Moderation * _Nonnull)group_moderation, mem);
     }
     mem_delete(mem, group_moderation);
 }
 
-non_null()
-static Tox_Event_Group_Moderation *tox_events_add_group_moderation(Tox_Events *events, const Memory *mem)
+static Tox_Event_Group_Moderation *tox_events_add_group_moderation(Tox_Events *_Nonnull events, const Memory *_Nonnull mem)
 {
     Tox_Event_Group_Moderation *const group_moderation = tox_event_group_moderation_new(mem);
 
@@ -164,7 +152,10 @@ static Tox_Event_Group_Moderation *tox_events_add_group_moderation(Tox_Events *e
     event.type = TOX_EVENT_GROUP_MODERATION;
     event.data.group_moderation = group_moderation;
 
-    tox_events_add(events, &event);
+    if (!tox_events_add(events, &event)) {
+        tox_event_group_moderation_free(group_moderation, mem);
+        return nullptr;
+    }
     return group_moderation;
 }
 
@@ -182,12 +173,8 @@ bool tox_event_group_moderation_unpack(
     return tox_event_group_moderation_unpack_into(*event, bu);
 }
 
-non_null()
-static Tox_Event_Group_Moderation *tox_event_group_moderation_alloc(void *user_data)
+static Tox_Event_Group_Moderation *tox_event_group_moderation_alloc(Tox_Events_State *_Nonnull state)
 {
-    Tox_Events_State *state = tox_events_alloc(user_data);
-    assert(state != nullptr);
-
     if (state->events == nullptr) {
         return nullptr;
     }
@@ -212,7 +199,8 @@ void tox_events_handle_group_moderation(
     Tox *tox, uint32_t group_number, uint32_t source_peer_id, uint32_t target_peer_id, Tox_Group_Mod_Event mod_type,
     void *user_data)
 {
-    Tox_Event_Group_Moderation *group_moderation = tox_event_group_moderation_alloc(user_data);
+    Tox_Events_State *state = tox_events_alloc(user_data);
+    Tox_Event_Group_Moderation *group_moderation = tox_event_group_moderation_alloc(state);
 
     if (group_moderation == nullptr) {
         return;

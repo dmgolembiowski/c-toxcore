@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2016-2018 The TokTok team.
+ * Copyright © 2016-2025 The TokTok team.
  * Copyright © 2014 Tox project.
  */
 
@@ -10,48 +10,45 @@
 #define C_TOXCORE_TOXCORE_FRIEND_REQUESTS_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "attributes.h"
 #include "friend_connection.h"
+#include "mem.h"
 
-#define MAX_FRIEND_REQUEST_DATA_SIZE (ONION_CLIENT_MAX_DATA_SIZE - (1 + sizeof(uint32_t)))
+// TODO(Jfreegman): This should be the maximum size that an onion client can handle.
+#define MAX_FRIEND_REQUEST_DATA_SIZE (ONION_CLIENT_MAX_DATA_SIZE - 100)
 
 typedef struct Friend_Requests Friend_Requests;
 
 /** Set and get the nospam variable used to prevent one type of friend request spam. */
-non_null() void set_nospam(Friend_Requests *fr, uint32_t num);
-non_null() uint32_t get_nospam(const Friend_Requests *fr);
+void set_nospam(Friend_Requests *_Nonnull fr, uint32_t num);
+uint32_t get_nospam(const Friend_Requests *_Nonnull fr);
 
 /** @brief Remove real_pk from received_requests list.
  *
  * @retval 0 if it removed it successfully.
  * @retval -1 if it didn't find it.
  */
-non_null()
-int remove_request_received(Friend_Requests *fr, const uint8_t *real_pk);
+int remove_request_received(Friend_Requests *_Nonnull fr, const uint8_t *_Nonnull real_pk);
 
-typedef void fr_friend_request_cb(void *object, const uint8_t *public_key, const uint8_t *message, size_t length,
-                                  void *user_data);
+typedef void fr_friend_request_cb(void *_Nonnull object, const uint8_t *_Nonnull public_key, const uint8_t *_Nonnull message, size_t length,
+                                  void *_Nullable user_data);
 
 /** Set the function that will be executed when a friend request for us is received. */
-non_null()
-void callback_friendrequest(Friend_Requests *fr, fr_friend_request_cb *function, void *object);
+void callback_friendrequest(Friend_Requests *_Nonnull fr, fr_friend_request_cb *_Nullable function, void *_Nullable object);
 
-typedef int filter_function_cb(void *object, const uint8_t *public_key);
+typedef int filter_function_cb(void *_Nonnull object, const uint8_t *_Nonnull public_key);
 
 /** @brief Set the function used to check if a friend request should be displayed to the user or not.
  * It must return 0 if the request is ok (anything else if it is bad).
  */
-non_null()
-void set_filter_function(Friend_Requests *fr, filter_function_cb *function, void *userdata);
+void set_filter_function(Friend_Requests *_Nonnull fr, filter_function_cb *_Nullable function, void *_Nullable userdata);
 
 /** Sets up friendreq packet handlers. */
-non_null()
-void friendreq_init(Friend_Requests *fr, Friend_Connections *fr_c);
+void friendreq_init(Friend_Requests *_Nonnull fr, Friend_Connections *_Nonnull fr_c);
 
-Friend_Requests *friendreq_new(void);
+Friend_Requests *_Nullable friendreq_new(const Memory *_Nonnull mem);
 
-nullable(1)
-void friendreq_kill(Friend_Requests *fr);
-
+void friendreq_kill(Friend_Requests *_Nullable fr);
 #endif /* C_TOXCORE_TOXCORE_FRIEND_REQUESTS_H */

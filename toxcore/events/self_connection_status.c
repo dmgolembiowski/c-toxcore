@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2023-2024 The TokTok team.
+ * Copyright © 2023-2026 The TokTok team.
  */
 
 #include "events_alloc.h"
@@ -12,6 +12,7 @@
 #include "../ccompat.h"
 #include "../mem.h"
 #include "../tox.h"
+#include "../tox_event.h"
 #include "../tox_events.h"
 #include "../tox_pack.h"
 #include "../tox_unpack.h"
@@ -26,9 +27,7 @@ struct Tox_Event_Self_Connection_Status {
     Tox_Connection connection_status;
 };
 
-non_null()
-static void tox_event_self_connection_status_set_connection_status(Tox_Event_Self_Connection_Status *self_connection_status,
-        Tox_Connection connection_status)
+static void tox_event_self_connection_status_set_connection_status(Tox_Event_Self_Connection_Status *_Nonnull self_connection_status, Tox_Connection connection_status)
 {
     assert(self_connection_status != nullptr);
     self_connection_status->connection_status = connection_status;
@@ -39,15 +38,13 @@ Tox_Connection tox_event_self_connection_status_get_connection_status(const Tox_
     return self_connection_status->connection_status;
 }
 
-non_null()
-static void tox_event_self_connection_status_construct(Tox_Event_Self_Connection_Status *self_connection_status)
+static void tox_event_self_connection_status_construct(Tox_Event_Self_Connection_Status *_Nonnull self_connection_status)
 {
     *self_connection_status = (Tox_Event_Self_Connection_Status) {
         TOX_CONNECTION_NONE
     };
 }
-non_null()
-static void tox_event_self_connection_status_destruct(Tox_Event_Self_Connection_Status *self_connection_status, const Memory *mem)
+static void tox_event_self_connection_status_destruct(Tox_Event_Self_Connection_Status *_Nonnull self_connection_status, const Memory *_Nonnull mem)
 {
     return;
 }
@@ -58,9 +55,7 @@ bool tox_event_self_connection_status_pack(
     return tox_connection_pack(event->connection_status, bp);
 }
 
-non_null()
-static bool tox_event_self_connection_status_unpack_into(
-    Tox_Event_Self_Connection_Status *event, Bin_Unpack *bu)
+static bool tox_event_self_connection_status_unpack_into(Tox_Event_Self_Connection_Status *_Nonnull event, Bin_Unpack *_Nonnull bu)
 {
     assert(event != nullptr);
     return tox_connection_unpack(&event->connection_status, bu);
@@ -93,13 +88,12 @@ Tox_Event_Self_Connection_Status *tox_event_self_connection_status_new(const Mem
 void tox_event_self_connection_status_free(Tox_Event_Self_Connection_Status *self_connection_status, const Memory *mem)
 {
     if (self_connection_status != nullptr) {
-        tox_event_self_connection_status_destruct(self_connection_status, mem);
+        tox_event_self_connection_status_destruct((Tox_Event_Self_Connection_Status * _Nonnull)self_connection_status, mem);
     }
     mem_delete(mem, self_connection_status);
 }
 
-non_null()
-static Tox_Event_Self_Connection_Status *tox_events_add_self_connection_status(Tox_Events *events, const Memory *mem)
+static Tox_Event_Self_Connection_Status *tox_events_add_self_connection_status(Tox_Events *_Nonnull events, const Memory *_Nonnull mem)
 {
     Tox_Event_Self_Connection_Status *const self_connection_status = tox_event_self_connection_status_new(mem);
 
@@ -111,7 +105,10 @@ static Tox_Event_Self_Connection_Status *tox_events_add_self_connection_status(T
     event.type = TOX_EVENT_SELF_CONNECTION_STATUS;
     event.data.self_connection_status = self_connection_status;
 
-    tox_events_add(events, &event);
+    if (!tox_events_add(events, &event)) {
+        tox_event_self_connection_status_free(self_connection_status, mem);
+        return nullptr;
+    }
     return self_connection_status;
 }
 
@@ -129,12 +126,8 @@ bool tox_event_self_connection_status_unpack(
     return tox_event_self_connection_status_unpack_into(*event, bu);
 }
 
-non_null()
-static Tox_Event_Self_Connection_Status *tox_event_self_connection_status_alloc(void *user_data)
+static Tox_Event_Self_Connection_Status *tox_event_self_connection_status_alloc(Tox_Events_State *_Nonnull state)
 {
-    Tox_Events_State *state = tox_events_alloc(user_data);
-    assert(state != nullptr);
-
     if (state->events == nullptr) {
         return nullptr;
     }
@@ -159,7 +152,8 @@ void tox_events_handle_self_connection_status(
     Tox *tox, Tox_Connection connection_status,
     void *user_data)
 {
-    Tox_Event_Self_Connection_Status *self_connection_status = tox_event_self_connection_status_alloc(user_data);
+    Tox_Events_State *state = tox_events_alloc(user_data);
+    Tox_Event_Self_Connection_Status *self_connection_status = tox_event_self_connection_status_alloc(state);
 
     if (self_connection_status == nullptr) {
         return;

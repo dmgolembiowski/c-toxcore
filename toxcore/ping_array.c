@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2016-2018 The TokTok team.
+ * Copyright © 2016-2025 The TokTok team.
  * Copyright © 2014 Tox project.
  */
 
@@ -17,15 +17,15 @@
 #include "mono_time.h"
 
 typedef struct Ping_Array_Entry {
-    uint8_t *data;
+    uint8_t *_Nullable data;
     uint32_t length;
     uint64_t ping_time;
     uint64_t ping_id;
 } Ping_Array_Entry;
 
 struct Ping_Array {
-    const Memory *mem;
-    Ping_Array_Entry *entries;
+    const Memory *_Nonnull mem;
+    Ping_Array_Entry *_Nonnull entries;
 
     uint32_t last_deleted; /* number representing the next entry to be deleted. */
     uint32_t last_added;   /* number representing the last entry to be added. */
@@ -50,15 +50,15 @@ Ping_Array *ping_array_new(const Memory *mem, uint32_t size, uint32_t timeout)
         return nullptr;
     }
 
-    Ping_Array_Entry *entries = (Ping_Array_Entry *)mem_valloc(mem, size, sizeof(Ping_Array_Entry));
+    Ping_Array_Entry *const entries = (Ping_Array_Entry *)mem_valloc(mem, size, sizeof(Ping_Array_Entry));
 
     if (entries == nullptr) {
         mem_delete(mem, empty_array);
         return nullptr;
     }
+    empty_array->entries = entries;
 
     empty_array->mem = mem;
-    empty_array->entries = entries;
     empty_array->last_deleted = 0;
     empty_array->last_added = 0;
     empty_array->total_size = size;
@@ -66,8 +66,7 @@ Ping_Array *ping_array_new(const Memory *mem, uint32_t size, uint32_t timeout)
     return empty_array;
 }
 
-non_null()
-static void clear_entry(Ping_Array *array, uint32_t index)
+static void clear_entry(Ping_Array *_Nonnull array, uint32_t index)
 {
     const Ping_Array_Entry empty = {nullptr};
     mem_delete(array->mem, array->entries[index].data);
@@ -91,8 +90,7 @@ void ping_array_kill(Ping_Array *array)
 }
 
 /** Clear timed out entries. */
-non_null()
-static void ping_array_clear_timedout(Ping_Array *array, const Mono_Time *mono_time)
+static void ping_array_clear_timedout(Ping_Array *_Nonnull array, const Mono_Time *_Nonnull mono_time)
 {
     while (array->last_deleted != array->last_added) {
         const uint32_t index = array->last_deleted % array->total_size;

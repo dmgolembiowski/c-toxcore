@@ -1,42 +1,55 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2016-2018 The TokTok team.
+ * Copyright © 2016-2025 The TokTok team.
  * Copyright © 2013-2015 Tox project.
  */
 #include "video.h"
+
+#include <vpx/vpx_decoder.h>
+#include <vpx/vpx_encoder.h>
+#include <vpx/vpx_image.h>
+
+#include <vpx/vp8cx.h>
+#include <vpx/vp8dx.h>
 
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "msi.h"
 #include "ring_buffer.h"
 #include "rtp.h"
 
 #include "../toxcore/ccompat.h"
 #include "../toxcore/logger.h"
 #include "../toxcore/mono_time.h"
-#include "../toxcore/network.h"
+#include "../toxcore/util.h"
 
-/**
- * Soft deadline the decoder should attempt to meet, in "us" (microseconds).
- * Set to zero for unlimited.
- *
- * By convention, the value 1 is used to mean "return as fast as possible."
- */
-// TODO(zoff99): don't hardcode this, let the application choose it
-#define WANTED_MAX_DECODER_FPS 40
+struct VCSession {
+    /* encoding */
+    vpx_codec_ctx_t encoder[1];
+    uint32_t frame_counter;
 
-/**
- * VPX_DL_REALTIME       (1)
- * deadline parameter analogous to VPx REALTIME mode.
- *
- * VPX_DL_GOOD_QUALITY   (1000000)
- * deadline parameter analogous to VPx GOOD QUALITY mode.
- *
- * VPX_DL_BEST_QUALITY   (0)
- * deadline parameter analogous to VPx BEST QUALITY mode.
- */
-#define MAX_DECODE_TIME_US (1000000 / WANTED_MAX_DECODER_FPS) // to allow x fps
+    vpx_image_t raw_encoder_frame;
+    bool raw_encoder_frame_allocated;
+
+    /* decoding */
+    vpx_codec_ctx_t decoder[1];
+    struct RingBuffer *vbuf_raw; /* Un-decoded data */
+
+    uint64_t linfts; /* Last received frame time stamp */
+    uint32_t lcfd; /* Last calculated frame duration for incoming video payload */
+
+    uint32_t friend_number;
+
+    /* Video frame receive callback */
+    vc_video_receive_frame_cb *vcb;
+    void *user_data;
+
+    pthread_mutex_t queue_mutex[1];
+    pthread_mutex_t *mutable_queue_mutex;
+    const Logger *log;
+
+    vpx_codec_iter_t iter;
+};
 
 /**
  * Codec control function to set encoder internal speed settings. Changes in
@@ -56,11 +69,17 @@
 #define VIDEO_BITRATE_INITIAL_VALUE 5000
 #define VIDEO_DECODE_BUFFER_SIZE 5 // this buffer has normally max. 1 entry
 
-static vpx_codec_iface_t *video_codec_decoder_interface(void)
+/**
+ * Security limits to prevent resource exhaustion.
+ */
+#define VIDEO_MAX_FRAME_SIZE (10 * 1024 * 1024)
+#define VIDEO_MAX_RESOLUTION_LIMIT 4096
+
+static vpx_codec_iface_t *_Nonnull video_codec_decoder_interface(void)
 {
     return vpx_codec_vp8_dx();
 }
-static vpx_codec_iface_t *video_codec_encoder_interface(void)
+static vpx_codec_iface_t *_Nonnull video_codec_encoder_interface(void)
 {
     return vpx_codec_vp8_cx();
 }
@@ -74,7 +93,7 @@ static vpx_codec_iface_t *video_codec_encoder_interface(void)
 #define VPX_MAX_DECODER_THREADS 4
 #define VIDEO_VP8_DECODER_POST_PROCESSING_ENABLED 0
 
-static void vc_init_encoder_cfg(const Logger *log, vpx_codec_enc_cfg_t *cfg, int16_t kf_max_dist)
+static void vc_init_encoder_cfg(const Logger *_Nonnull log, vpx_codec_enc_cfg_t *_Nonnull cfg, int16_t kf_max_dist)
 {
     const vpx_codec_err_t rc = vpx_codec_enc_config_default(video_codec_encoder_interface(), cfg, 0);
 
@@ -114,10 +133,10 @@ static void vc_init_encoder_cfg(const Logger *log, vpx_codec_enc_cfg_t *cfg, int
      */
     if (kf_max_dist > 1) {
         cfg->kf_max_dist = kf_max_dist; // a full frame every x frames minimum (can be more often, codec decides automatically)
-        LOGGER_DEBUG(log, "kf_max_dist=%d (1)", cfg->kf_max_dist);
+        LOGGER_DEBUG(log, "kf_max_dist=%u (1)", cfg->kf_max_dist);
     } else {
         cfg->kf_max_dist = VPX_MAX_DIST_START;
-        LOGGER_DEBUG(log, "kf_max_dist=%d (2)", cfg->kf_max_dist);
+        LOGGER_DEBUG(log, "kf_max_dist=%u (2)", cfg->kf_max_dist);
     }
 
     cfg->g_threads = VPX_MAX_ENCODER_THREADS; // Maximum number of threads to use
@@ -143,9 +162,13 @@ static void vc_init_encoder_cfg(const Logger *log, vpx_codec_enc_cfg_t *cfg, int
 #endif /* 0 */
 }
 
-VCSession *vc_new(Mono_Time *mono_time, const Logger *log, ToxAV *av, uint32_t friend_number,
-                  toxav_video_receive_frame_cb *cb, void *cb_data)
+VCSession *vc_new(const Logger *log, const Mono_Time *mono_time, uint32_t friend_number,
+                  vc_video_receive_frame_cb *cb, void *user_data)
 {
+    if (mono_time == nullptr) {
+        return nullptr;
+    }
+
     VCSession *vc = (VCSession *)calloc(1, sizeof(VCSession));
     vpx_codec_err_t rc;
 
@@ -159,6 +182,7 @@ VCSession *vc_new(Mono_Time *mono_time, const Logger *log, ToxAV *av, uint32_t f
         free(vc);
         return nullptr;
     }
+    vc->mutable_queue_mutex = vc->queue_mutex;
 
     const int cpu_used_value = VP8E_SET_CPUUSED_VALUE;
 
@@ -205,7 +229,7 @@ VCSession *vc_new(Mono_Time *mono_time, const Logger *log, ToxAV *av, uint32_t f
         }
     } else {
         vp8_postproc_cfg_t pp = {0, 0, 0};
-        vpx_codec_err_t cc_res = vpx_codec_control(vc->decoder, VP8_SET_POSTPROC, &pp);
+        const vpx_codec_err_t cc_res = vpx_codec_control(vc->decoder, VP8_SET_POSTPROC, &pp);
 
         if (cc_res != VPX_CODEC_OK) {
             LOGGER_WARNING(log, "Failed to turn OFF postproc");
@@ -216,7 +240,7 @@ VCSession *vc_new(Mono_Time *mono_time, const Logger *log, ToxAV *av, uint32_t f
 
     /* Set encoder to some initial values
      */
-    vpx_codec_enc_cfg_t  cfg;
+    vpx_codec_enc_cfg_t cfg;
     vc_init_encoder_cfg(log, &cfg, 1);
 
     LOGGER_DEBUG(log, "Using VP8 codec for encoder (0.1)");
@@ -236,7 +260,7 @@ VCSession *vc_new(Mono_Time *mono_time, const Logger *log, ToxAV *av, uint32_t f
     }
 
     /*
-     * VPX_CTRL_USE_TYPE(VP8E_SET_NOISE_SENSITIVITY,  unsigned int)
+     * VPX_CTRL_USE_TYPE(VP8E_SET_NOISE_SENSITIVITY, unsigned int)
      * control function to set noise sensitivity
      *   0: off, 1: OnYOnly, 2: OnYUV, 3: OnYUVAggressive, 4: Adaptive
      */
@@ -250,20 +274,22 @@ VCSession *vc_new(Mono_Time *mono_time, const Logger *log, ToxAV *av, uint32_t f
     }
 
 #endif /* 0 */
+
     vc->linfts = current_time_monotonic(mono_time);
     vc->lcfd = 60;
     vc->vcb = cb;
-    vc->vcb_user_data = cb_data;
+    vc->user_data = user_data;
     vc->friend_number = friend_number;
-    vc->av = av;
     vc->log = log;
     return vc;
+
 BASE_CLEANUP_1:
     vpx_codec_destroy(vc->decoder);
 BASE_CLEANUP:
     pthread_mutex_destroy(vc->queue_mutex);
     rb_kill(vc->vbuf_raw);
     free(vc);
+
     return nullptr;
 }
 
@@ -271,6 +297,10 @@ void vc_kill(VCSession *vc)
 {
     if (vc == nullptr) {
         return;
+    }
+
+    if (vc->raw_encoder_frame_allocated) {
+        vpx_img_free(&vc->raw_encoder_frame);
     }
 
     vpx_codec_destroy(vc->encoder);
@@ -305,21 +335,30 @@ void vc_iterate(VCSession *vc)
 
     const uint16_t log_rb_size = rb_size(vc->vbuf_raw);
     pthread_mutex_unlock(vc->queue_mutex);
-    const struct RTPHeader *const header = &p->header;
 
     uint32_t full_data_len;
 
-    if ((header->flags & RTP_LARGE_FRAME) != 0) {
-        full_data_len = header->data_length_full;
-        LOGGER_DEBUG(vc->log, "vc_iterate:001:full_data_len=%d", (int)full_data_len);
+    if ((rtp_message_flags(p) & RTP_LARGE_FRAME) != 0) {
+        full_data_len = rtp_message_data_length_full(p);
+        LOGGER_DEBUG(vc->log, "vc_iterate:001:full_data_len=%u", full_data_len);
     } else {
-        full_data_len = p->len;
+        full_data_len = rtp_message_len(p);
         LOGGER_DEBUG(vc->log, "vc_iterate:002");
     }
 
-    LOGGER_DEBUG(vc->log, "vc_iterate: rb_read p->len=%d p->header.xe=%d", (int)full_data_len, p->header.xe);
+    /* Security check: Ensure the reported full data length does not exceed the actual buffer size.
+     * rtp_message_len(p) returns the actual allocated payload size.
+     */
+    if (full_data_len > rtp_message_len(p)) {
+        LOGGER_ERROR(vc->log, "vc_iterate: Malicious packet detected! Lying length: %u actual: %u",
+                     full_data_len, (uint32_t)rtp_message_len(p));
+        free(p);
+        return;
+    }
+
+    LOGGER_DEBUG(vc->log, "vc_iterate: rb_read p->len=%u", full_data_len);
     LOGGER_DEBUG(vc->log, "vc_iterate: rb_read rb size=%d", (int)log_rb_size);
-    const vpx_codec_err_t rc = vpx_codec_decode(vc->decoder, p->data, full_data_len, nullptr, MAX_DECODE_TIME_US);
+    const vpx_codec_err_t rc = vpx_codec_decode(vc->decoder, rtp_message_data(p), full_data_len, nullptr, 0);
     free(p);
 
     if (rc != VPX_CODEC_OK) {
@@ -334,22 +373,20 @@ void vc_iterate(VCSession *vc)
             dest != nullptr;
             dest = vpx_codec_get_frame(vc->decoder, &iter)) {
         if (vc->vcb != nullptr) {
-            vc->vcb(vc->av, vc->friend_number, dest->d_w, dest->d_h,
+            vc->vcb(vc->friend_number, dest->d_w, dest->d_h,
                     dest->planes[0], dest->planes[1], dest->planes[2],
-                    dest->stride[0], dest->stride[1], dest->stride[2], vc->vcb_user_data);
+                    dest->stride[0], dest->stride[1], dest->stride[2], vc->user_data);
         }
-
-        vpx_img_free(dest); // is this needed? none of the VPx examples show that
     }
 }
 
-int vc_queue_message(Mono_Time *mono_time, void *cs, struct RTPMessage *msg)
+int vc_queue_message(const Mono_Time *mono_time, void *cs, struct RTPMessage *msg)
 {
     VCSession *vc = (VCSession *)cs;
 
     /* This function is called with complete messages
      * they have already been assembled.
-     * this function gets called from handle_rtp_packet() and handle_rtp_packet_v3()
+     * this function gets called from handle_rtp_packet()
      */
     if (vc == nullptr || msg == nullptr) {
         free(msg);
@@ -357,24 +394,29 @@ int vc_queue_message(Mono_Time *mono_time, void *cs, struct RTPMessage *msg)
         return -1;
     }
 
-    const struct RTPHeader *const header = &msg->header;
-
-    if (msg->header.pt == (RTP_TYPE_VIDEO + 2) % 128) {
+    if (rtp_message_pt(msg) == (RTP_TYPE_VIDEO + 2) % 128) {
         LOGGER_WARNING(vc->log, "Got dummy!");
         free(msg);
         return 0;
     }
 
-    if (msg->header.pt != RTP_TYPE_VIDEO % 128) {
-        LOGGER_WARNING(vc->log, "Invalid payload type! pt=%d", (int)msg->header.pt);
+    if (rtp_message_pt(msg) != RTP_TYPE_VIDEO % 128) {
+        LOGGER_WARNING(vc->log, "Invalid payload type! pt=%d", (int)rtp_message_pt(msg));
+        free(msg);
+        return -1;
+    }
+
+    /* Security check: Sanitize message size to prevent memory exhaustion */
+    if (rtp_message_data_length_full(msg) > VIDEO_MAX_FRAME_SIZE) {
+        LOGGER_ERROR(vc->log, "Message too large! size=%u", (uint32_t)rtp_message_data_length_full(msg));
         free(msg);
         return -1;
     }
 
     pthread_mutex_lock(vc->queue_mutex);
 
-    if ((header->flags & RTP_LARGE_FRAME) != 0 && header->pt == RTP_TYPE_VIDEO % 128) {
-        LOGGER_DEBUG(vc->log, "rb_write msg->len=%d b0=%d b1=%d", (int)msg->len, (int)msg->data[0], (int)msg->data[1]);
+    if ((rtp_message_flags(msg) & RTP_LARGE_FRAME) != 0 && rtp_message_pt(msg) == RTP_TYPE_VIDEO % 128) {
+        LOGGER_DEBUG(vc->log, "rb_write msg->len=%d b0=%d b1=%d", (int)rtp_message_len(msg), (int)rtp_message_data(msg)[0], (int)rtp_message_data(msg)[1]);
     }
 
     free(rb_write(vc->vbuf_raw, msg));
@@ -390,6 +432,12 @@ int vc_queue_message(Mono_Time *mono_time, void *cs, struct RTPMessage *msg)
 int vc_reconfigure_encoder(VCSession *vc, uint32_t bit_rate, uint16_t width, uint16_t height, int16_t kf_max_dist)
 {
     if (vc == nullptr) {
+        return -1;
+    }
+
+    /* Security check: Sanitize resolution to prevent resource exhaustion */
+    if (width == 0 || height == 0 || width > VIDEO_MAX_RESOLUTION_LIMIT || height > VIDEO_MAX_RESOLUTION_LIMIT) {
+        LOGGER_ERROR(vc->log, "Invalid resolution requested: %ux%u", (uint32_t)width, (uint32_t)height);
         return -1;
     }
 
@@ -414,15 +462,16 @@ int vc_reconfigure_encoder(VCSession *vc, uint32_t bit_rate, uint16_t width, uin
          * reconfiguring encoder to use resolutions greater than initially set.
          */
         LOGGER_DEBUG(vc->log, "Have to reinitialize vpx encoder on session %p", (void *)vc);
-        vpx_codec_ctx_t new_c;
         vpx_codec_enc_cfg_t  cfg;
         vc_init_encoder_cfg(vc->log, &cfg, kf_max_dist);
         cfg.rc_target_bitrate = bit_rate;
         cfg.g_w = width;
         cfg.g_h = height;
 
+        /* Atomic reconfiguration: Initialize new encoder first */
+        vpx_codec_ctx_t new_encoder;
         LOGGER_DEBUG(vc->log, "Using VP8 codec for encoder");
-        vpx_codec_err_t rc = vpx_codec_enc_init(&new_c, video_codec_encoder_interface(), &cfg, VPX_CODEC_USE_FRAME_THREADING);
+        vpx_codec_err_t rc = vpx_codec_enc_init(&new_encoder, video_codec_encoder_interface(), &cfg, VPX_CODEC_USE_FRAME_THREADING);
 
         if (rc != VPX_CODEC_OK) {
             LOGGER_ERROR(vc->log, "Failed to initialize encoder: %s", vpx_codec_err_to_string(rc));
@@ -431,17 +480,98 @@ int vc_reconfigure_encoder(VCSession *vc, uint32_t bit_rate, uint16_t width, uin
 
         const int cpu_used_value = VP8E_SET_CPUUSED_VALUE;
 
-        rc = vpx_codec_control(&new_c, VP8E_SET_CPUUSED, cpu_used_value);
+        rc = vpx_codec_control(&new_encoder, VP8E_SET_CPUUSED, cpu_used_value);
 
         if (rc != VPX_CODEC_OK) {
             LOGGER_ERROR(vc->log, "Failed to set encoder control setting: %s", vpx_codec_err_to_string(rc));
-            vpx_codec_destroy(&new_c);
+            vpx_codec_destroy(&new_encoder);
             return -1;
         }
 
+        /* Swap only on success */
         vpx_codec_destroy(vc->encoder);
-        memcpy(vc->encoder, &new_c, sizeof(new_c));
+        *vc->encoder = new_encoder;
+        return 0;
     }
 
     return 0;
+}
+
+int vc_encode(VCSession *vc, uint16_t width, uint16_t height, const uint8_t *y,
+              const uint8_t *u, const uint8_t *v, int encode_flags)
+{
+    if (vc->raw_encoder_frame_allocated && (vc->raw_encoder_frame.d_w != width || vc->raw_encoder_frame.d_h != height)) {
+        vpx_img_free(&vc->raw_encoder_frame);
+        vc->raw_encoder_frame_allocated = false;
+    }
+
+    if (!vc->raw_encoder_frame_allocated) {
+        if (vpx_img_alloc(&vc->raw_encoder_frame, VPX_IMG_FMT_I420, width, height, 1) == nullptr) {
+            LOGGER_ERROR(vc->log, "Could not allocate image for frame");
+            return -1;
+        }
+
+        vc->raw_encoder_frame_allocated = true;
+    }
+
+    vpx_image_t *img = &vc->raw_encoder_frame;
+
+    memcpy(img->planes[VPX_PLANE_Y], y, (size_t)width * height);
+    memcpy(img->planes[VPX_PLANE_U], u, ((size_t)width / 2) * (height / 2));
+    memcpy(img->planes[VPX_PLANE_V], v, ((size_t)width / 2) * (height / 2));
+
+    int vpx_flags = 0;
+
+    if ((encode_flags & VC_EFLAG_FORCE_KF) != 0) {
+        vpx_flags |= VPX_EFLAG_FORCE_KF;
+    }
+
+    const vpx_codec_err_t vrc = vpx_codec_encode(vc->encoder, img,
+                                vc->frame_counter, 1, vpx_flags, VPX_DL_REALTIME);
+
+    if (vrc != VPX_CODEC_OK) {
+        LOGGER_ERROR(vc->log, "Could not encode video frame: %s", vpx_codec_err_to_string(vrc));
+        return -1;
+    }
+
+    vc->iter = nullptr;
+    return 0;
+}
+
+int vc_get_cx_data(VCSession *vc, uint8_t **data, uint32_t *size, bool *is_keyframe)
+{
+    const vpx_codec_cx_pkt_t *pkt = vpx_codec_get_cx_data(vc->encoder, &vc->iter);
+
+    while (pkt != nullptr && pkt->kind != VPX_CODEC_CX_FRAME_PKT) {
+        pkt = vpx_codec_get_cx_data(vc->encoder, &vc->iter);
+    }
+
+    if (pkt == nullptr) {
+        return 0;
+    }
+
+    *data = (uint8_t *)pkt->data.frame.buf;
+    *size = (uint32_t)pkt->data.frame.sz;
+    *is_keyframe = (pkt->data.frame.flags & VPX_FRAME_IS_KEY) != 0;
+
+    return 1;
+}
+
+uint32_t vc_get_lcfd(const VCSession *vc)
+{
+    uint32_t lcfd;
+    pthread_mutex_lock(vc->mutable_queue_mutex);
+    lcfd = vc->lcfd;
+    pthread_mutex_unlock(vc->mutable_queue_mutex);
+    return lcfd;
+}
+
+pthread_mutex_t *vc_get_queue_mutex(VCSession *vc)
+{
+    return &vc->queue_mutex[0];
+}
+
+void vc_increment_frame_counter(VCSession *vc)
+{
+    ++vc->frame_counter;
 }

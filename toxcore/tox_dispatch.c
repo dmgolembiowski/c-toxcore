@@ -1,59 +1,59 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2022 The TokTok team.
+ * Copyright © 2022-2025 The TokTok team.
  */
 
 #include "tox_dispatch.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 
 #include "attributes.h"
 #include "ccompat.h"
 #include "events/events_alloc.h" // IWYU pragma: keep
-#include "tox.h"
 #include "tox_event.h"
 #include "tox_events.h"
 
 struct Tox_Dispatch {
-    tox_events_conference_connected_cb *conference_connected_callback;
-    tox_events_conference_invite_cb *conference_invite_callback;
-    tox_events_conference_message_cb *conference_message_callback;
-    tox_events_conference_peer_list_changed_cb *conference_peer_list_changed_callback;
-    tox_events_conference_peer_name_cb *conference_peer_name_callback;
-    tox_events_conference_title_cb *conference_title_callback;
-    tox_events_file_chunk_request_cb *file_chunk_request_callback;
-    tox_events_file_recv_cb *file_recv_callback;
-    tox_events_file_recv_chunk_cb *file_recv_chunk_callback;
-    tox_events_file_recv_control_cb *file_recv_control_callback;
-    tox_events_friend_connection_status_cb *friend_connection_status_callback;
-    tox_events_friend_lossless_packet_cb *friend_lossless_packet_callback;
-    tox_events_friend_lossy_packet_cb *friend_lossy_packet_callback;
-    tox_events_friend_message_cb *friend_message_callback;
-    tox_events_friend_name_cb *friend_name_callback;
-    tox_events_friend_read_receipt_cb *friend_read_receipt_callback;
-    tox_events_friend_request_cb *friend_request_callback;
-    tox_events_friend_status_cb *friend_status_callback;
-    tox_events_friend_status_message_cb *friend_status_message_callback;
-    tox_events_friend_typing_cb *friend_typing_callback;
-    tox_events_self_connection_status_cb *self_connection_status_callback;
-    tox_events_group_peer_name_cb *group_peer_name_callback;
-    tox_events_group_peer_status_cb *group_peer_status_callback;
-    tox_events_group_topic_cb *group_topic_callback;
-    tox_events_group_privacy_state_cb *group_privacy_state_callback;
-    tox_events_group_voice_state_cb *group_voice_state_callback;
-    tox_events_group_topic_lock_cb *group_topic_lock_callback;
-    tox_events_group_peer_limit_cb *group_peer_limit_callback;
-    tox_events_group_password_cb *group_password_callback;
-    tox_events_group_message_cb *group_message_callback;
-    tox_events_group_private_message_cb *group_private_message_callback;
-    tox_events_group_custom_packet_cb *group_custom_packet_callback;
-    tox_events_group_custom_private_packet_cb *group_custom_private_packet_callback;
-    tox_events_group_invite_cb *group_invite_callback;
-    tox_events_group_peer_join_cb *group_peer_join_callback;
-    tox_events_group_peer_exit_cb *group_peer_exit_callback;
-    tox_events_group_self_join_cb *group_self_join_callback;
-    tox_events_group_join_fail_cb *group_join_fail_callback;
-    tox_events_group_moderation_cb *group_moderation_callback;
-    tox_events_dht_get_nodes_response_cb *dht_get_nodes_response_callback;
+    tox_events_conference_connected_cb *_Nullable conference_connected_callback;
+    tox_events_conference_invite_cb *_Nullable conference_invite_callback;
+    tox_events_conference_message_cb *_Nullable conference_message_callback;
+    tox_events_conference_peer_list_changed_cb *_Nullable conference_peer_list_changed_callback;
+    tox_events_conference_peer_name_cb *_Nullable conference_peer_name_callback;
+    tox_events_conference_title_cb *_Nullable conference_title_callback;
+    tox_events_file_chunk_request_cb *_Nullable file_chunk_request_callback;
+    tox_events_file_recv_cb *_Nullable file_recv_callback;
+    tox_events_file_recv_chunk_cb *_Nullable file_recv_chunk_callback;
+    tox_events_file_recv_control_cb *_Nullable file_recv_control_callback;
+    tox_events_friend_connection_status_cb *_Nullable friend_connection_status_callback;
+    tox_events_friend_lossless_packet_cb *_Nullable friend_lossless_packet_callback;
+    tox_events_friend_lossy_packet_cb *_Nullable friend_lossy_packet_callback;
+    tox_events_friend_message_cb *_Nullable friend_message_callback;
+    tox_events_friend_name_cb *_Nullable friend_name_callback;
+    tox_events_friend_read_receipt_cb *_Nullable friend_read_receipt_callback;
+    tox_events_friend_request_cb *_Nullable friend_request_callback;
+    tox_events_friend_status_cb *_Nullable friend_status_callback;
+    tox_events_friend_status_message_cb *_Nullable friend_status_message_callback;
+    tox_events_friend_typing_cb *_Nullable friend_typing_callback;
+    tox_events_self_connection_status_cb *_Nullable self_connection_status_callback;
+    tox_events_group_peer_name_cb *_Nullable group_peer_name_callback;
+    tox_events_group_peer_status_cb *_Nullable group_peer_status_callback;
+    tox_events_group_topic_cb *_Nullable group_topic_callback;
+    tox_events_group_privacy_state_cb *_Nullable group_privacy_state_callback;
+    tox_events_group_voice_state_cb *_Nullable group_voice_state_callback;
+    tox_events_group_topic_lock_cb *_Nullable group_topic_lock_callback;
+    tox_events_group_peer_limit_cb *_Nullable group_peer_limit_callback;
+    tox_events_group_password_cb *_Nullable group_password_callback;
+    tox_events_group_message_cb *_Nullable group_message_callback;
+    tox_events_group_private_message_cb *_Nullable group_private_message_callback;
+    tox_events_group_custom_packet_cb *_Nullable group_custom_packet_callback;
+    tox_events_group_custom_private_packet_cb *_Nullable group_custom_private_packet_callback;
+    tox_events_group_invite_cb *_Nullable group_invite_callback;
+    tox_events_group_peer_join_cb *_Nullable group_peer_join_callback;
+    tox_events_group_peer_exit_cb *_Nullable group_peer_exit_callback;
+    tox_events_group_self_join_cb *_Nullable group_self_join_callback;
+    tox_events_group_join_fail_cb *_Nullable group_join_fail_callback;
+    tox_events_group_moderation_cb *_Nullable group_moderation_callback;
+    tox_events_dht_nodes_response_cb *_Nullable dht_nodes_response_callback;
 };
 
 Tox_Dispatch *tox_dispatch_new(Tox_Err_Dispatch_New *error)
@@ -279,14 +279,13 @@ void tox_events_callback_group_moderation(
 {
     dispatch->group_moderation_callback = callback;
 }
-void tox_events_callback_dht_get_nodes_response(
-    Tox_Dispatch *dispatch, tox_events_dht_get_nodes_response_cb *callback)
+void tox_events_callback_dht_nodes_response(
+    Tox_Dispatch *dispatch, tox_events_dht_nodes_response_cb *callback)
 {
-    dispatch->dht_get_nodes_response_callback = callback;
+    dispatch->dht_nodes_response_callback = callback;
 }
 
-non_null(1, 2) nullable(3)
-static void tox_dispatch_invoke_event(const Tox_Dispatch *dispatch, const Tox_Event *event, void *user_data)
+static void tox_dispatch_invoke_event(const Tox_Dispatch *_Nonnull dispatch, const Tox_Event *_Nonnull event, void *_Nullable user_data)
 {
     switch (event->type) {
         case TOX_EVENT_CONFERENCE_CONNECTED: {
@@ -601,9 +600,9 @@ static void tox_dispatch_invoke_event(const Tox_Dispatch *dispatch, const Tox_Ev
             break;
         }
 
-        case TOX_EVENT_DHT_GET_NODES_RESPONSE: {
-            if (dispatch->dht_get_nodes_response_callback != nullptr) {
-                dispatch->dht_get_nodes_response_callback(event->data.dht_get_nodes_response, user_data);
+        case TOX_EVENT_DHT_NODES_RESPONSE: {
+            if (dispatch->dht_nodes_response_callback != nullptr) {
+                dispatch->dht_nodes_response_callback(event->data.dht_nodes_response, user_data);
             }
 
             break;

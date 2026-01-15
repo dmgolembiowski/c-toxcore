@@ -17,8 +17,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tool: [autotools, clang-tidy, compcert, cppcheck, doxygen, goblint, infer, freebsd, misra, modules, pkgsrc, rpm, slimcc, sparse, tcc, tokstyle]
-    runs-on: ubuntu-latest
+        tool: [autotools, clang-tidy, compcert, cppcheck, doxygen, goblint, infer, misra, modules, pkgsrc, rpm, slimcc, sparse, tcc, tokstyle]
+    runs-on: ubuntu-22.04
     steps:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -34,45 +34,31 @@ jobs:
         with:
           file: other/docker/${{ matrix.tool }}/${{ matrix.tool }}.Dockerfile
 
+  sanitizer:
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [asan, tsan, ubsan]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Run sanitizer
+        run: other/docker/circleci/run "${{ matrix.sanitizer }}"
+
   coverage-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
       - name: Build, test, and upload coverage
         run: other/docker/coverage/run
-
-  generate-events:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Run generate_event_c
-        run: |
-          other/event_tooling/run
-          git diff --exit-code
-
-  cimplefmt:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Run cimplefmt
-        run: other/docker/cimplefmt/run -u $(find tox* -name "*.[ch]")
-
-  build-android:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - run: .github/scripts/cmake-android armeabi-v7a
-      - run: .github/scripts/cmake-android arm64-v8a
-      - run: .github/scripts/cmake-android x86
-      - run: .github/scripts/cmake-android x86_64
 
   build-macos:
     runs-on: macos-latest
@@ -86,7 +72,7 @@ jobs:
   build-windows-msvc:
     strategy:
       matrix:
-        version: [2019, 2022]
+        version: [2022, 2025]
     runs-on: windows-${{ matrix.version }}
     env:
       VCPKG_ROOT: "C:/vcpkg"
@@ -96,7 +82,7 @@ jobs:
         with:
           submodules: recursive
       - name: Export GitHub Actions cache environment variables
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
@@ -111,7 +97,7 @@ jobs:
           ctest -j50 --output-on-failure --rerun-failed --repeat until-pass:6 --build-config Debug
 
   build-netbsd:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -130,23 +116,25 @@ jobs:
               libopus
               libsodium
               libvpx
+              ninja-build
               pkg-config
 
           run: |
             # TODO(iphydf): Investigate NetBSD failures on these tests.
-            sed -Ei -e '/\((TCP|dht_getnodes_api)\)/s/^/#/' auto_tests/CMakeLists.txt
+            sed -Ei -e '/\((TCP|dht_nodes_response_api|tcp_relay)\)/s/^/#/' auto_tests/CMakeLists.txt
             cmake . \
               -DMIN_LOGGER_LEVEL=TRACE \
               -DMUST_BUILD_TOXAV=ON \
               -DNON_HERMETIC_TESTS=ON \
               -DTEST_TIMEOUT_SECONDS=90 \
               -DUSE_IPV6=OFF \
-              -DAUTOTEST=ON
+              -DAUTOTEST=ON \
+              -GNinja
             cmake --build . --target install
             ctest -j50 --output-on-failure --rerun-failed --repeat until-pass:6
 
   build-freebsd:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -166,32 +154,34 @@ jobs:
               libconfig
               libsodium
               libvpx
+              ninja
               opus
               pkgconf
 
           run: |
             # TODO(iphydf): Investigate FreeBSD failures on these tests.
-            sed -Ei -e '/\(dht_getnodes_api\)/s/^/#/' auto_tests/CMakeLists.txt
+            sed -Ei -e '/\(dht_nodes_response_api\)/s/^/#/' auto_tests/CMakeLists.txt
             cmake . \
               -DMIN_LOGGER_LEVEL=TRACE \
               -DMUST_BUILD_TOXAV=ON \
               -DNON_HERMETIC_TESTS=ON \
               -DTEST_TIMEOUT_SECONDS=50 \
               -DUSE_IPV6=OFF \
-              -DAUTOTEST=ON
+              -DAUTOTEST=ON \
+              -GNinja
             cmake --build . --target install
             ctest -j50 --output-on-failure --rerun-failed --repeat until-pass:6
 
   mypy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-      - name: Set up Python 3.9
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: 3.9
+          python-version: 3.12
       - name: Install mypy
         run: pip install mypy
       - name: Run mypy

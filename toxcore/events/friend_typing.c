@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2023-2024 The TokTok team.
+ * Copyright © 2023-2026 The TokTok team.
  */
 
 #include "events_alloc.h"
@@ -12,6 +12,7 @@
 #include "../ccompat.h"
 #include "../mem.h"
 #include "../tox.h"
+#include "../tox_event.h"
 #include "../tox_events.h"
 
 /*****************************************************
@@ -25,9 +26,7 @@ struct Tox_Event_Friend_Typing {
     bool typing;
 };
 
-non_null()
-static void tox_event_friend_typing_set_friend_number(Tox_Event_Friend_Typing *friend_typing,
-        uint32_t friend_number)
+static void tox_event_friend_typing_set_friend_number(Tox_Event_Friend_Typing *_Nonnull friend_typing, uint32_t friend_number)
 {
     assert(friend_typing != nullptr);
     friend_typing->friend_number = friend_number;
@@ -38,9 +37,7 @@ uint32_t tox_event_friend_typing_get_friend_number(const Tox_Event_Friend_Typing
     return friend_typing->friend_number;
 }
 
-non_null()
-static void tox_event_friend_typing_set_typing(Tox_Event_Friend_Typing *friend_typing,
-        bool typing)
+static void tox_event_friend_typing_set_typing(Tox_Event_Friend_Typing *_Nonnull friend_typing, bool typing)
 {
     assert(friend_typing != nullptr);
     friend_typing->typing = typing;
@@ -51,15 +48,13 @@ bool tox_event_friend_typing_get_typing(const Tox_Event_Friend_Typing *friend_ty
     return friend_typing->typing;
 }
 
-non_null()
-static void tox_event_friend_typing_construct(Tox_Event_Friend_Typing *friend_typing)
+static void tox_event_friend_typing_construct(Tox_Event_Friend_Typing *_Nonnull friend_typing)
 {
     *friend_typing = (Tox_Event_Friend_Typing) {
         0
     };
 }
-non_null()
-static void tox_event_friend_typing_destruct(Tox_Event_Friend_Typing *friend_typing, const Memory *mem)
+static void tox_event_friend_typing_destruct(Tox_Event_Friend_Typing *_Nonnull friend_typing, const Memory *_Nonnull mem)
 {
     return;
 }
@@ -72,9 +67,7 @@ bool tox_event_friend_typing_pack(
            && bin_pack_bool(bp, event->typing);
 }
 
-non_null()
-static bool tox_event_friend_typing_unpack_into(
-    Tox_Event_Friend_Typing *event, Bin_Unpack *bu)
+static bool tox_event_friend_typing_unpack_into(Tox_Event_Friend_Typing *_Nonnull event, Bin_Unpack *_Nonnull bu)
 {
     assert(event != nullptr);
     if (!bin_unpack_array_fixed(bu, 2, nullptr)) {
@@ -112,13 +105,12 @@ Tox_Event_Friend_Typing *tox_event_friend_typing_new(const Memory *mem)
 void tox_event_friend_typing_free(Tox_Event_Friend_Typing *friend_typing, const Memory *mem)
 {
     if (friend_typing != nullptr) {
-        tox_event_friend_typing_destruct(friend_typing, mem);
+        tox_event_friend_typing_destruct((Tox_Event_Friend_Typing * _Nonnull)friend_typing, mem);
     }
     mem_delete(mem, friend_typing);
 }
 
-non_null()
-static Tox_Event_Friend_Typing *tox_events_add_friend_typing(Tox_Events *events, const Memory *mem)
+static Tox_Event_Friend_Typing *tox_events_add_friend_typing(Tox_Events *_Nonnull events, const Memory *_Nonnull mem)
 {
     Tox_Event_Friend_Typing *const friend_typing = tox_event_friend_typing_new(mem);
 
@@ -130,7 +122,10 @@ static Tox_Event_Friend_Typing *tox_events_add_friend_typing(Tox_Events *events,
     event.type = TOX_EVENT_FRIEND_TYPING;
     event.data.friend_typing = friend_typing;
 
-    tox_events_add(events, &event);
+    if (!tox_events_add(events, &event)) {
+        tox_event_friend_typing_free(friend_typing, mem);
+        return nullptr;
+    }
     return friend_typing;
 }
 
@@ -148,12 +143,8 @@ bool tox_event_friend_typing_unpack(
     return tox_event_friend_typing_unpack_into(*event, bu);
 }
 
-non_null()
-static Tox_Event_Friend_Typing *tox_event_friend_typing_alloc(void *user_data)
+static Tox_Event_Friend_Typing *tox_event_friend_typing_alloc(Tox_Events_State *_Nonnull state)
 {
-    Tox_Events_State *state = tox_events_alloc(user_data);
-    assert(state != nullptr);
-
     if (state->events == nullptr) {
         return nullptr;
     }
@@ -178,7 +169,8 @@ void tox_events_handle_friend_typing(
     Tox *tox, uint32_t friend_number, bool typing,
     void *user_data)
 {
-    Tox_Event_Friend_Typing *friend_typing = tox_event_friend_typing_alloc(user_data);
+    Tox_Events_State *state = tox_events_alloc(user_data);
+    Tox_Event_Friend_Typing *friend_typing = tox_event_friend_typing_alloc(state);
 
     if (friend_typing == nullptr) {
         return;

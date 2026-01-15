@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2016-2018 The TokTok team.
+ * Copyright © 2016-2025 The TokTok team.
  * Copyright © 2013 Tox project.
  */
 
@@ -9,12 +9,15 @@
 #ifndef C_TOXCORE_TOXCORE_ONION_ANNOUNCE_H
 #define C_TOXCORE_TOXCORE_ONION_ANNOUNCE_H
 
+#include <stdint.h>
+
 #include "DHT.h"
 #include "attributes.h"
 #include "crypto_core.h"
 #include "logger.h"
 #include "mem.h"
 #include "mono_time.h"
+#include "net.h"
 #include "network.h"
 #include "onion.h"
 #include "timed_auth.h"
@@ -41,13 +44,15 @@
 #define ONION_DATA_REQUEST_MIN_SIZE (1 + CRYPTO_PUBLIC_KEY_SIZE + CRYPTO_NONCE_SIZE + CRYPTO_PUBLIC_KEY_SIZE + CRYPTO_MAC_SIZE)
 #define MAX_DATA_REQUEST_SIZE (ONION_MAX_DATA_SIZE - ONION_DATA_REQUEST_MIN_SIZE)
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct Onion_Announce Onion_Announce;
 
 /** These two are not public; they are for tests only! */
-non_null()
-uint8_t *onion_announce_entry_public_key(Onion_Announce *onion_a, uint32_t entry);
-non_null()
-void onion_announce_entry_set_time(Onion_Announce *onion_a, uint32_t entry, uint64_t announce_time);
+uint8_t *_Nullable onion_announce_entry_public_key(Onion_Announce *_Nonnull onion_a, uint32_t entry);
+void onion_announce_entry_set_time(Onion_Announce *_Nonnull onion_a, uint32_t entry, uint64_t announce_time);
 
 /** @brief Create an onion announce request packet in packet of max_packet_length.
  *
@@ -64,10 +69,9 @@ void onion_announce_entry_set_time(Onion_Announce *onion_a, uint32_t entry, uint
  * return -1 on failure.
  * return packet length on success.
  */
-non_null()
-int create_announce_request(const Random *rng, uint8_t *packet, uint16_t max_packet_length, const uint8_t *dest_client_id,
-                            const uint8_t *public_key, const uint8_t *secret_key, const uint8_t *ping_id, const uint8_t *client_id,
-                            const uint8_t *data_public_key, uint64_t sendback_data);
+int create_announce_request(const Memory *_Nonnull mem, const Random *_Nonnull rng, uint8_t *_Nonnull packet, uint16_t max_packet_length, const uint8_t *_Nonnull dest_client_id,
+                            const uint8_t *_Nonnull public_key, const uint8_t *_Nonnull secret_key, const uint8_t *_Nonnull ping_id, const uint8_t *_Nonnull client_id, const uint8_t *_Nonnull data_public_key,
+                            uint64_t sendback_data);
 
 /** @brief Create an onion data request packet in packet of max_packet_length.
  *
@@ -81,9 +85,8 @@ int create_announce_request(const Random *rng, uint8_t *packet, uint16_t max_pac
  * return -1 on failure.
  * return 0 on success.
  */
-non_null()
-int create_data_request(const Random *rng, uint8_t *packet, uint16_t max_packet_length, const uint8_t *public_key,
-                        const uint8_t *encrypt_public_key, const uint8_t *nonce, const uint8_t *data, uint16_t length);
+int create_data_request(const Memory *_Nonnull mem, const Random *_Nonnull rng, uint8_t *_Nonnull packet, uint16_t max_packet_length, const uint8_t *_Nonnull public_key,
+                        const uint8_t *_Nonnull encrypt_public_key, const uint8_t *_Nonnull nonce, const uint8_t *_Nonnull data, uint16_t length);
 
 /** @brief Create and send an onion announce request packet.
  *
@@ -99,13 +102,9 @@ int create_data_request(const Random *rng, uint8_t *packet, uint16_t max_packet_
  * return -1 on failure.
  * return 0 on success.
  */
-non_null()
-int send_announce_request(
-    const Logger *log, const Networking_Core *net, const Random *rng,
-    const Onion_Path *path, const Node_format *dest,
-    const uint8_t *public_key, const uint8_t *secret_key,
-    const uint8_t *ping_id, const uint8_t *client_id,
-    const uint8_t *data_public_key, uint64_t sendback_data);
+int send_announce_request(const Logger *_Nonnull log, const Memory *_Nonnull mem, const Networking_Core *_Nonnull net, const Random *_Nonnull rng, const Onion_Path *_Nonnull path,
+                          const Node_format *_Nonnull dest, const uint8_t *_Nonnull public_key, const uint8_t *_Nonnull secret_key, const uint8_t *_Nonnull ping_id, const uint8_t *_Nonnull client_id,
+                          const uint8_t *_Nonnull data_public_key, uint64_t sendback_data);
 
 /** @brief Create and send an onion data request packet.
  *
@@ -123,24 +122,22 @@ int send_announce_request(
  * return -1 on failure.
  * return 0 on success.
  */
-non_null()
-int send_data_request(
-    const Logger *log, const Networking_Core *net, const Random *rng, const Onion_Path *path, const IP_Port *dest,
-    const uint8_t *public_key, const uint8_t *encrypt_public_key, const uint8_t *nonce,
-    const uint8_t *data, uint16_t length);
+int send_data_request(const Logger *_Nonnull log, const Memory *_Nonnull mem, const Networking_Core *_Nonnull net, const Random *_Nonnull rng, const Onion_Path *_Nonnull path,
+                      const IP_Port *_Nonnull dest, const uint8_t *_Nonnull public_key, const uint8_t *_Nonnull encrypt_public_key, const uint8_t *_Nonnull nonce, const uint8_t *_Nonnull data, uint16_t length);
 
-typedef int pack_extra_data_cb(void *object, const Logger *logger, const Mono_Time *mono_time,
-                               uint8_t num_nodes, uint8_t *plain, uint16_t plain_size,
-                               uint8_t *response, uint16_t response_size, uint16_t offset);
+typedef int pack_extra_data_cb(void *_Nonnull object, const Logger *_Nonnull logger, const Memory *_Nonnull mem, const Mono_Time *_Nonnull mono_time,
+                               uint8_t num_nodes, uint8_t *_Nonnull plain, uint16_t plain_size,
+                               uint8_t *_Nonnull response, uint16_t response_size, uint16_t offset);
 
-non_null()
-void onion_announce_extra_data_callback(Onion_Announce *onion_a, uint16_t extra_data_max_size,
-                                        pack_extra_data_cb *extra_data_callback, void *extra_data_object);
+void onion_announce_extra_data_callback(Onion_Announce *_Nonnull onion_a, uint16_t extra_data_max_size, pack_extra_data_cb *_Nonnull extra_data_callback, void *_Nonnull extra_data_object);
 
-non_null()
-Onion_Announce *new_onion_announce(const Logger *log, const Memory *mem, const Random *rng, const Mono_Time *mono_time, DHT *dht);
+Onion_Announce *_Nullable new_onion_announce(const Logger *_Nonnull log, const Memory *_Nonnull mem, const Random *_Nonnull rng, const Mono_Time *_Nonnull mono_time, DHT *_Nonnull dht,
+        Networking_Core *_Nonnull net);
 
-nullable(1)
-void kill_onion_announce(Onion_Announce *onion_a);
+void kill_onion_announce(Onion_Announce *_Nullable onion_a);
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
 
 #endif /* C_TOXCORE_TOXCORE_ONION_ANNOUNCE_H */

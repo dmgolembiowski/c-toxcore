@@ -1,11 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2019-2022 The TokTok team.
+ * Copyright © 2019-2025 The TokTok team.
  */
 
 #include "forwarding.h"
 
 #include <assert.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "DHT.h"
@@ -13,16 +12,18 @@
 #include "ccompat.h"
 #include "crypto_core.h"
 #include "logger.h"
+#include "mem.h"
 #include "mono_time.h"
 #include "network.h"
 #include "timed_auth.h"
 
 struct Forwarding {
-    const Logger *log;
-    const Random *rng;
-    DHT *dht;
-    const Mono_Time *mono_time;
-    Networking_Core *net;
+    const Logger *_Nonnull log;
+    const Memory *_Nonnull mem;
+    const Random *_Nonnull rng;
+    DHT *_Nonnull dht;
+    const Mono_Time *_Nonnull mono_time;
+    Networking_Core *_Nonnull net;
 
     uint8_t hmac_key[CRYPTO_HMAC_KEY_SIZE];
 
@@ -35,11 +36,6 @@ struct Forwarding {
     forwarded_response_cb *forwarded_response_callback;
     void *forwarded_response_callback_object;
 };
-
-DHT *forwarding_get_dht(const Forwarding *forwarding)
-{
-    return forwarding->dht;
-}
 
 #define SENDBACK_TIMEOUT 3600
 
@@ -86,21 +82,18 @@ bool create_forward_chain_packet(const uint8_t *chain_keys, uint16_t chain_lengt
     return true;
 }
 
-non_null()
 static uint16_t forwarding_packet_length(uint16_t sendback_data_len, uint16_t data_length)
 {
     const uint16_t sendback_len = sendback_data_len == 0 ? 0 : TIMED_AUTH_SIZE + sendback_data_len;
     return 1 + 1 + sendback_len + data_length;
 }
 
-non_null(1, 4, 6) nullable(2)
-static bool create_forwarding_packet(const Forwarding *forwarding,
-                                     const uint8_t *sendback_data, uint16_t sendback_data_len,
-                                     const uint8_t *data, uint16_t length,
-                                     uint8_t *packet)
+static bool create_forwarding_packet(const Forwarding *_Nonnull forwarding,
+                                     const uint8_t *_Nullable sendback_data, uint16_t sendback_data_len,
+                                     const uint8_t *_Nonnull data, uint16_t length,
+                                     uint8_t *_Nonnull packet)
 {
     packet[0] = NET_PACKET_FORWARDING;
-
     if (sendback_data_len == 0) {
         packet[1] = 0;
         memcpy(packet + 1 + 1, data, length);
@@ -142,10 +135,9 @@ bool send_forwarding(const Forwarding *forwarding, const IP_Port *dest,
 
 #define FORWARD_REQUEST_MIN_PACKET_SIZE (1 + CRYPTO_PUBLIC_KEY_SIZE)
 
-non_null(1) nullable(2, 4)
-static bool handle_forward_request_dht(const Forwarding *forwarding,
-                                       const uint8_t *sendback_data, uint16_t sendback_data_len,
-                                       const uint8_t *packet, uint16_t length)
+static bool handle_forward_request_dht(const Forwarding *_Nonnull forwarding,
+                                       const uint8_t *_Nullable sendback_data, uint16_t sendback_data_len,
+                                       const uint8_t *_Nullable packet, uint16_t length)
 {
     if (length < FORWARD_REQUEST_MIN_PACKET_SIZE) {
         return false;
@@ -169,12 +161,10 @@ static bool handle_forward_request_dht(const Forwarding *forwarding,
     return route_packet(forwarding->dht, public_key, forwarding_packet, len) == len;
 }
 
-non_null(1, 2) nullable(3, 5)
-static int handle_forward_request(void *object, const IP_Port *source, const uint8_t *packet, uint16_t length,
-                                  void *userdata)
+static int handle_forward_request(void *_Nonnull object, const IP_Port *_Nonnull source, const uint8_t *_Nullable packet, uint16_t length,
+                                  void *_Nullable userdata)
 {
     const Forwarding *forwarding = (const Forwarding *)object;
-
     uint8_t sendback_data[1 + MAX_PACKED_IPPORT_SIZE];
     sendback_data[0] = SENDBACK_IPPORT;
 
@@ -190,12 +180,10 @@ static int handle_forward_request(void *object, const IP_Port *source, const uin
 #define MIN_NONEMPTY_SENDBACK_SIZE TIMED_AUTH_SIZE
 #define FORWARD_REPLY_MIN_PACKET_SIZE (1 + 1 + MIN_NONEMPTY_SENDBACK_SIZE)
 
-non_null(1, 2) nullable(3, 5)
-static int handle_forward_reply(void *object, const IP_Port *source, const uint8_t *packet, uint16_t length,
-                                void *userdata)
+static int handle_forward_reply(void *_Nonnull object, const IP_Port *_Nonnull source, const uint8_t *_Nullable packet, uint16_t length,
+                                void *_Nullable userdata)
 {
     const Forwarding *forwarding = (const Forwarding *)object;
-
     if (length < FORWARD_REPLY_MIN_PACKET_SIZE) {
         return 1;
     }
@@ -264,12 +252,10 @@ static int handle_forward_reply(void *object, const IP_Port *source, const uint8
 
 #define FORWARDING_MIN_PACKET_SIZE (1 + 1)
 
-non_null(1, 2) nullable(3, 5)
-static int handle_forwarding(void *object, const IP_Port *source, const uint8_t *packet, uint16_t length,
-                             void *userdata)
+static int handle_forwarding(void *_Nonnull object, const IP_Port *_Nonnull source, const uint8_t *_Nullable packet, uint16_t length,
+                             void *_Nullable userdata)
 {
     const Forwarding *forwarding = (const Forwarding *)object;
-
     if (length < FORWARDING_MIN_PACKET_SIZE) {
         return 1;
     }
@@ -357,23 +343,25 @@ void set_callback_forward_reply(Forwarding *forwarding, forward_reply_cb *functi
     forwarding->forward_reply_callback_object = object;
 }
 
-Forwarding *new_forwarding(const Logger *log, const Random *rng, const Mono_Time *mono_time, DHT *dht)
+Forwarding *_Nullable new_forwarding(const Logger *log, const Memory *mem, const Random *rng, const Mono_Time *mono_time, DHT *dht,
+                                     Networking_Core *net)
 {
     if (log == nullptr || mono_time == nullptr || dht == nullptr) {
         return nullptr;
     }
 
-    Forwarding *forwarding = (Forwarding *)calloc(1, sizeof(Forwarding));
+    Forwarding *forwarding = (Forwarding *)mem_alloc(mem, sizeof(Forwarding));
 
     if (forwarding == nullptr) {
         return nullptr;
     }
 
     forwarding->log = log;
+    forwarding->mem = mem;
     forwarding->rng = rng;
     forwarding->mono_time = mono_time;
     forwarding->dht = dht;
-    forwarding->net = dht_get_net(dht);
+    forwarding->net = net;
 
     networking_registerhandler(forwarding->net, NET_PACKET_FORWARD_REQUEST, &handle_forward_request, forwarding);
     networking_registerhandler(forwarding->net, NET_PACKET_FORWARD_REPLY, &handle_forward_reply, forwarding);
@@ -396,5 +384,5 @@ void kill_forwarding(Forwarding *forwarding)
 
     crypto_memzero(forwarding->hmac_key, CRYPTO_HMAC_KEY_SIZE);
 
-    free(forwarding);
+    mem_delete(forwarding->mem, forwarding);
 }

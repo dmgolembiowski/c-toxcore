@@ -1,16 +1,15 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2022 The TokTok team.
+ * Copyright © 2022-2025 The TokTok team.
  */
 
 #ifndef C_TOXCORE_TOXCORE_EVENTS_EVENTS_ALLOC_H
 #define C_TOXCORE_TOXCORE_EVENTS_EVENTS_ALLOC_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include "../attributes.h"
-#include "../bin_pack.h"
-#include "../bin_unpack.h"
-#include "../mem.h"
 #include "../tox.h"
-#include "../tox_event.h"
 #include "../tox_events.h"
 #include "../tox_private.h"
 
@@ -18,18 +17,20 @@
 extern "C" {
 #endif
 
+struct Memory;
+
 struct Tox_Events {
-    Tox_Event *events;
+    Tox_Event *_Nonnull events;
     uint32_t events_size;
     uint32_t events_capacity;
 
-    const Memory *mem;
+    const struct Memory *_Nonnull mem;
 };
 
 typedef struct Tox_Events_State {
     Tox_Err_Events_Iterate error;
-    const Memory *mem;
-    Tox_Events *events;
+    const struct Memory *_Nonnull mem;
+    Tox_Events *_Nonnull events;
 } Tox_Events_State;
 
 tox_conference_connected_cb tox_events_handle_conference_connected;
@@ -38,7 +39,7 @@ tox_conference_message_cb tox_events_handle_conference_message;
 tox_conference_peer_list_changed_cb tox_events_handle_conference_peer_list_changed;
 tox_conference_peer_name_cb tox_events_handle_conference_peer_name;
 tox_conference_title_cb tox_events_handle_conference_title;
-tox_dht_get_nodes_response_cb tox_events_handle_dht_get_nodes_response;
+tox_dht_nodes_response_cb tox_events_handle_dht_nodes_response;
 tox_file_chunk_request_cb tox_events_handle_file_chunk_request;
 tox_file_recv_cb tox_events_handle_file_recv;
 tox_file_recv_chunk_cb tox_events_handle_file_recv_chunk;
@@ -73,11 +74,9 @@ tox_group_self_join_cb tox_events_handle_group_self_join;
 tox_group_join_fail_cb tox_events_handle_group_join_fail;
 tox_group_moderation_cb tox_events_handle_group_moderation;
 
-non_null()
-Tox_Events_State *tox_events_alloc(void *user_data);
+Tox_Events_State *_Nonnull tox_events_alloc(void *_Nonnull user_data);
 
-non_null()
-bool tox_events_add(Tox_Events *events, const Tox_Event *event);
+bool tox_events_add(Tox_Events *_Nonnull events, const Tox_Event *_Nonnull event);
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2023-2024 The TokTok team.
+ * Copyright © 2023-2026 The TokTok team.
  */
 
 #include "events_alloc.h"
@@ -12,6 +12,7 @@
 #include "../ccompat.h"
 #include "../mem.h"
 #include "../tox.h"
+#include "../tox_event.h"
 #include "../tox_events.h"
 #include "../tox_pack.h"
 #include "../tox_unpack.h"
@@ -28,9 +29,7 @@ struct Tox_Event_Group_Peer_Status {
     Tox_User_Status status;
 };
 
-non_null()
-static void tox_event_group_peer_status_set_group_number(Tox_Event_Group_Peer_Status *group_peer_status,
-        uint32_t group_number)
+static void tox_event_group_peer_status_set_group_number(Tox_Event_Group_Peer_Status *_Nonnull group_peer_status, uint32_t group_number)
 {
     assert(group_peer_status != nullptr);
     group_peer_status->group_number = group_number;
@@ -41,9 +40,7 @@ uint32_t tox_event_group_peer_status_get_group_number(const Tox_Event_Group_Peer
     return group_peer_status->group_number;
 }
 
-non_null()
-static void tox_event_group_peer_status_set_peer_id(Tox_Event_Group_Peer_Status *group_peer_status,
-        uint32_t peer_id)
+static void tox_event_group_peer_status_set_peer_id(Tox_Event_Group_Peer_Status *_Nonnull group_peer_status, uint32_t peer_id)
 {
     assert(group_peer_status != nullptr);
     group_peer_status->peer_id = peer_id;
@@ -54,9 +51,7 @@ uint32_t tox_event_group_peer_status_get_peer_id(const Tox_Event_Group_Peer_Stat
     return group_peer_status->peer_id;
 }
 
-non_null()
-static void tox_event_group_peer_status_set_status(Tox_Event_Group_Peer_Status *group_peer_status,
-        Tox_User_Status status)
+static void tox_event_group_peer_status_set_status(Tox_Event_Group_Peer_Status *_Nonnull group_peer_status, Tox_User_Status status)
 {
     assert(group_peer_status != nullptr);
     group_peer_status->status = status;
@@ -67,15 +62,13 @@ Tox_User_Status tox_event_group_peer_status_get_status(const Tox_Event_Group_Pee
     return group_peer_status->status;
 }
 
-non_null()
-static void tox_event_group_peer_status_construct(Tox_Event_Group_Peer_Status *group_peer_status)
+static void tox_event_group_peer_status_construct(Tox_Event_Group_Peer_Status *_Nonnull group_peer_status)
 {
     *group_peer_status = (Tox_Event_Group_Peer_Status) {
         0
     };
 }
-non_null()
-static void tox_event_group_peer_status_destruct(Tox_Event_Group_Peer_Status *group_peer_status, const Memory *mem)
+static void tox_event_group_peer_status_destruct(Tox_Event_Group_Peer_Status *_Nonnull group_peer_status, const Memory *_Nonnull mem)
 {
     return;
 }
@@ -89,9 +82,7 @@ bool tox_event_group_peer_status_pack(
            && tox_user_status_pack(event->status, bp);
 }
 
-non_null()
-static bool tox_event_group_peer_status_unpack_into(
-    Tox_Event_Group_Peer_Status *event, Bin_Unpack *bu)
+static bool tox_event_group_peer_status_unpack_into(Tox_Event_Group_Peer_Status *_Nonnull event, Bin_Unpack *_Nonnull bu)
 {
     assert(event != nullptr);
     if (!bin_unpack_array_fixed(bu, 3, nullptr)) {
@@ -130,13 +121,12 @@ Tox_Event_Group_Peer_Status *tox_event_group_peer_status_new(const Memory *mem)
 void tox_event_group_peer_status_free(Tox_Event_Group_Peer_Status *group_peer_status, const Memory *mem)
 {
     if (group_peer_status != nullptr) {
-        tox_event_group_peer_status_destruct(group_peer_status, mem);
+        tox_event_group_peer_status_destruct((Tox_Event_Group_Peer_Status * _Nonnull)group_peer_status, mem);
     }
     mem_delete(mem, group_peer_status);
 }
 
-non_null()
-static Tox_Event_Group_Peer_Status *tox_events_add_group_peer_status(Tox_Events *events, const Memory *mem)
+static Tox_Event_Group_Peer_Status *tox_events_add_group_peer_status(Tox_Events *_Nonnull events, const Memory *_Nonnull mem)
 {
     Tox_Event_Group_Peer_Status *const group_peer_status = tox_event_group_peer_status_new(mem);
 
@@ -148,7 +138,10 @@ static Tox_Event_Group_Peer_Status *tox_events_add_group_peer_status(Tox_Events 
     event.type = TOX_EVENT_GROUP_PEER_STATUS;
     event.data.group_peer_status = group_peer_status;
 
-    tox_events_add(events, &event);
+    if (!tox_events_add(events, &event)) {
+        tox_event_group_peer_status_free(group_peer_status, mem);
+        return nullptr;
+    }
     return group_peer_status;
 }
 
@@ -166,12 +159,8 @@ bool tox_event_group_peer_status_unpack(
     return tox_event_group_peer_status_unpack_into(*event, bu);
 }
 
-non_null()
-static Tox_Event_Group_Peer_Status *tox_event_group_peer_status_alloc(void *user_data)
+static Tox_Event_Group_Peer_Status *tox_event_group_peer_status_alloc(Tox_Events_State *_Nonnull state)
 {
-    Tox_Events_State *state = tox_events_alloc(user_data);
-    assert(state != nullptr);
-
     if (state->events == nullptr) {
         return nullptr;
     }
@@ -196,7 +185,8 @@ void tox_events_handle_group_peer_status(
     Tox *tox, uint32_t group_number, uint32_t peer_id, Tox_User_Status status,
     void *user_data)
 {
-    Tox_Event_Group_Peer_Status *group_peer_status = tox_event_group_peer_status_alloc(user_data);
+    Tox_Events_State *state = tox_events_alloc(user_data);
+    Tox_Event_Group_Peer_Status *group_peer_status = tox_event_group_peer_status_alloc(state);
 
     if (group_peer_status == nullptr) {
         return;

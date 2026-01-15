@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2016-2023 The TokTok team.
+ * Copyright © 2016-2025 The TokTok team.
  * Copyright © 2014 Tox project.
  */
 #ifndef _XOPEN_SOURCE
@@ -43,12 +43,12 @@ struct Mono_Time {
     uint64_t base_time;
 
 #ifndef ESP_PLATFORM
-    /* protect `time` from concurrent access */
-    pthread_rwlock_t *time_update_lock;
+    /** protect @ref cur_time from concurrent access */
+    pthread_rwlock_t *_Nonnull time_update_lock;
 #endif /* ESP_PLATFORM */
 
-    mono_time_current_time_cb *current_time_callback;
-    void *user_data;
+    mono_time_current_time_cb *_Nonnull current_time_callback;
+    void *_Nullable user_data;
 };
 
 static uint64_t timespec_to_u64(struct timespec clock_mono)
@@ -57,8 +57,7 @@ static uint64_t timespec_to_u64(struct timespec clock_mono)
 }
 
 #ifdef OS_WIN32
-non_null()
-static uint64_t current_time_monotonic_default(void *user_data)
+static uint64_t current_time_monotonic_default(void *_Nonnull user_data)
 {
     LARGE_INTEGER freq;
     LARGE_INTEGER count;
@@ -79,8 +78,7 @@ static uint64_t current_time_monotonic_default(void *user_data)
 }
 #else
 #ifdef __APPLE__
-non_null()
-static uint64_t current_time_monotonic_default(void *user_data)
+static uint64_t current_time_monotonic_default(void *_Nonnull user_data)
 {
     struct timespec clock_mono;
     clock_serv_t muhclock;
@@ -95,8 +93,7 @@ static uint64_t current_time_monotonic_default(void *user_data)
     return timespec_to_u64(clock_mono);
 }
 #else // !__APPLE__
-non_null()
-static uint64_t current_time_monotonic_default(void *user_data)
+static uint64_t current_time_monotonic_default(void *_Nonnull user_data)
 {
 #ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
     // This assert should always fail. If it does, the fuzzing harness didn't
@@ -119,7 +116,7 @@ Mono_Time *mono_time_new(const Memory *mem, mono_time_current_time_cb *current_t
     }
 
 #ifndef ESP_PLATFORM
-    pthread_rwlock_t *rwlock = (pthread_rwlock_t *)mem_alloc(mem, sizeof(pthread_rwlock_t));
+    pthread_rwlock_t *const rwlock = (pthread_rwlock_t *)mem_alloc(mem, sizeof(pthread_rwlock_t));
 
     if (rwlock == nullptr) {
         mem_delete(mem, mono_time);
@@ -218,7 +215,7 @@ void mono_time_set_current_time_callback(Mono_Time *mono_time,
  * The starting point is unspecified and in particular is likely not comparable
  * to the return value of `mono_time_get_ms()`.
  */
-uint64_t current_time_monotonic(Mono_Time *mono_time)
+uint64_t current_time_monotonic(const Mono_Time *mono_time)
 {
     return mono_time->current_time_callback(mono_time->user_data);
 }

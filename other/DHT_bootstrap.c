@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2016-2018 The TokTok team.
+ * Copyright © 2016-2025 The TokTok team.
  * Copyright © 2013 Tox project.
  */
 
@@ -26,6 +26,8 @@
 #include "../toxcore/network.h"
 #include "../toxcore/onion.h"
 #include "../toxcore/onion_announce.h"
+#include "../toxcore/os_memory.h"
+#include "../toxcore/os_random.h"
 #include "../toxcore/tox.h"
 
 #define TCP_RELAY_ENABLED
@@ -117,10 +119,10 @@ static const char *strlevel(Logger_Level level)
     }
 }
 
-static void print_log(void *context, Logger_Level level, const char *file, int line,
+static void print_log(void *context, Logger_Level level, const char *file, uint32_t line,
                       const char *func, const char *message, void *userdata)
 {
-    fprintf(stderr, "[%s] %s:%d(%s) %s\n", strlevel(level), file, line, func, message);
+    fprintf(stderr, "[%s] %s:%u(%s) %s\n", strlevel(level), file, line, func, message);
 }
 
 int main(int argc, char *argv[])
@@ -144,27 +146,28 @@ int main(int argc, char *argv[])
     IP ip;
     ip_init(&ip, ipv6enabled);
 
-    Logger *logger = logger_new();
+    const Random *rng = os_random();
+    const Network *ns = os_network();
+    const Memory *mem = os_memory();
+
+    Logger *logger = logger_new(mem);
 
     if (MIN_LOGGER_LEVEL <= LOGGER_LEVEL_DEBUG) {
         logger_callback_log(logger, print_log, nullptr, nullptr);
     }
 
-    const Random *rng = os_random();
-    const Network *ns = os_network();
-    const Memory *mem = os_memory();
-
     Mono_Time *mono_time = mono_time_new(mem, nullptr, nullptr);
     const uint16_t start_port = PORT;
     const uint16_t end_port = start_port + (TOX_PORTRANGE_TO - TOX_PORTRANGE_FROM);
-    DHT *dht = new_dht(logger, mem, rng, ns, mono_time, new_networking_ex(logger, mem, ns, &ip, start_port, end_port, nullptr), true, true);
-    Onion *onion = new_onion(logger, mem, mono_time, rng, dht);
-    Forwarding *forwarding = new_forwarding(logger, rng, mono_time, dht);
-    GC_Announces_List *gc_announces_list = new_gca_list();
-    Onion_Announce *onion_a = new_onion_announce(logger, mem, rng, mono_time, dht);
+    Networking_Core *net = new_networking_ex(logger, mem, ns, &ip, start_port, end_port, nullptr);
+    DHT *dht = new_dht(logger, mem, rng, ns, mono_time, net, true, true);
+    Onion *onion = new_onion(logger, mem, mono_time, rng, dht, net);
+    Forwarding *forwarding = new_forwarding(logger, mem, rng, mono_time, dht, net);
+    GC_Announces_List *gc_announces_list = new_gca_list(mem);
+    Onion_Announce *onion_a = new_onion_announce(logger, mem, rng, mono_time, dht, net);
 
 #ifdef DHT_NODE_EXTRA_PACKETS
-    bootstrap_set_callbacks(dht_get_net(dht), (uint32_t)DAEMON_VERSION_NUMBER, (const uint8_t *) motd_str, strlen(motd_str) + 1);
+    bootstrap_set_callbacks(net, (uint32_t)DAEMON_VERSION_NUMBER, (const uint8_t *) motd_str, strlen(motd_str) + 1);
 #endif
 
     if (onion == nullptr || forwarding == nullptr || onion_a == nullptr) {
@@ -214,7 +217,7 @@ int main(int argc, char *argv[])
     fclose(file);
 
     printf("\n");
-    printf("Port: %u\n", net_ntohs(net_port(dht_get_net(dht))));
+    printf("Port: %u\n", net_ntohs(net_port(net)));
 
     if (argc > argvoffset + 3) {
         printf("Trying to bootstrap into the network...\n");
@@ -228,9 +231,12 @@ int main(int argc, char *argv[])
 
         const uint16_t port = net_htons((uint16_t)port_conv);
 
+        // TODO(iphydf): Maybe disable and only use IP addresses?
+        const bool dns_enabled = true;
+
         uint8_t *bootstrap_key = hex_string_to_bin(argv[argvoffset + 3]);
         const bool res = dht_bootstrap_from_address(dht, argv[argvoffset + 1],
-                         ipv6enabled, port, bootstrap_key);
+                         ipv6enabled, dns_enabled, port, bootstrap_key);
         free(bootstrap_key);
 
         if (!res) {
@@ -242,7 +248,7 @@ int main(int argc, char *argv[])
     bool is_waiting_for_dht_connection = true;
 
     uint64_t last_lan_discovery = 0;
-    const Broadcast_Info *broadcast = lan_discovery_init(ns);
+    const Broadcast_Info *broadcast = lan_discovery_init(mem, ns);
 
     while (true) {
         mono_time_update(mono_time);
@@ -255,14 +261,16 @@ int main(int argc, char *argv[])
         do_dht(dht);
 
         if (mono_time_is_timeout(mono_time, last_lan_discovery, is_waiting_for_dht_connection ? 5 : LAN_DISCOVERY_INTERVAL)) {
-            lan_discovery_send(dht_get_net(dht), broadcast, dht_get_self_public_key(dht), net_htons(PORT));
+            lan_discovery_send(net, broadcast, dht_get_self_public_key(dht), net_htons(PORT));
             last_lan_discovery = mono_time_get(mono_time);
         }
+
+        do_gca(mono_time, gc_announces_list);
 
 #ifdef TCP_RELAY_ENABLED
         do_tcp_server(tcp_s, mono_time);
 #endif
-        networking_poll(dht_get_net(dht), nullptr);
+        networking_poll(net, nullptr);
 
         c_sleep(1);
     }

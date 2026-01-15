@@ -8,7 +8,8 @@
 #include "../toxcore/mono_time.h"
 #include "../toxcore/forwarding.h"
 #include "../toxcore/net_crypto.h"
-#include "../toxcore/util.h"
+#include "../toxcore/os_memory.h"
+#include "../toxcore/os_random.h"
 #include "auto_test_support.h"
 #include "check_compat.h"
 
@@ -96,6 +97,7 @@ typedef struct Forwarding_Subtox {
     Logger *log;
     Mono_Time *mono_time;
     Networking_Core *net;
+    Net_Profile *tcp_np;
     DHT *dht;
     Net_Crypto *c;
     Forwarding *forwarding;
@@ -112,7 +114,7 @@ static Forwarding_Subtox *new_forwarding_subtox(const Memory *mem, bool no_udp, 
     Forwarding_Subtox *subtox = (Forwarding_Subtox *)calloc(1, sizeof(Forwarding_Subtox));
     ck_assert(subtox != nullptr);
 
-    subtox->log = logger_new();
+    subtox->log = logger_new(mem);
     ck_assert(subtox->log != nullptr);
     logger_callback_log(subtox->log, print_debug_logger, nullptr, index);
     subtox->mono_time = mono_time_new(mem, nullptr, nullptr);
@@ -126,13 +128,16 @@ static Forwarding_Subtox *new_forwarding_subtox(const Memory *mem, bool no_udp, 
 
     subtox->dht = new_dht(subtox->log, mem, rng, ns, subtox->mono_time, subtox->net, true, true);
 
-    const TCP_Proxy_Info inf = {{{{0}}}};
-    subtox->c = new_net_crypto(subtox->log, mem, rng, ns, subtox->mono_time, subtox->dht, &inf);
+    subtox->tcp_np = netprof_new(subtox->log, mem);
+    ck_assert(subtox->tcp_np != nullptr);
 
-    subtox->forwarding = new_forwarding(subtox->log, rng, subtox->mono_time, subtox->dht);
+    const TCP_Proxy_Info inf = {{{{0}}}};
+    subtox->c = new_net_crypto(subtox->log, mem, rng, ns, subtox->mono_time, subtox->net, subtox->dht, &auto_test_dht_funcs, &inf, subtox->tcp_np);
+
+    subtox->forwarding = new_forwarding(subtox->log, mem, rng, subtox->mono_time, subtox->dht, subtox->net);
     ck_assert(subtox->forwarding != nullptr);
 
-    subtox->announce = new_announcements(subtox->log, mem, rng, subtox->mono_time, subtox->forwarding);
+    subtox->announce = new_announcements(subtox->log, mem, rng, subtox->mono_time, subtox->forwarding, subtox->dht, subtox->net);
     ck_assert(subtox->announce != nullptr);
 
     return subtox;
@@ -143,6 +148,7 @@ static void kill_forwarding_subtox(const Memory *mem, Forwarding_Subtox *subtox)
     kill_announcements(subtox->announce);
     kill_forwarding(subtox->forwarding);
     kill_net_crypto(subtox->c);
+    netprof_kill(mem, subtox->tcp_np);
     kill_dht(subtox->dht);
     kill_networking(subtox->net);
     mono_time_free(mem, subtox->mono_time);

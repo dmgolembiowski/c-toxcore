@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2023-2024 The TokTok team.
+ * Copyright © 2023-2026 The TokTok team.
  */
 
 #include "events_alloc.h"
@@ -12,6 +12,7 @@
 #include "../ccompat.h"
 #include "../mem.h"
 #include "../tox.h"
+#include "../tox_event.h"
 #include "../tox_events.h"
 #include "../tox_pack.h"
 #include "../tox_unpack.h"
@@ -27,9 +28,7 @@ struct Tox_Event_Group_Voice_State {
     Tox_Group_Voice_State voice_state;
 };
 
-non_null()
-static void tox_event_group_voice_state_set_group_number(Tox_Event_Group_Voice_State *group_voice_state,
-        uint32_t group_number)
+static void tox_event_group_voice_state_set_group_number(Tox_Event_Group_Voice_State *_Nonnull group_voice_state, uint32_t group_number)
 {
     assert(group_voice_state != nullptr);
     group_voice_state->group_number = group_number;
@@ -40,9 +39,7 @@ uint32_t tox_event_group_voice_state_get_group_number(const Tox_Event_Group_Voic
     return group_voice_state->group_number;
 }
 
-non_null()
-static void tox_event_group_voice_state_set_voice_state(Tox_Event_Group_Voice_State *group_voice_state,
-        Tox_Group_Voice_State voice_state)
+static void tox_event_group_voice_state_set_voice_state(Tox_Event_Group_Voice_State *_Nonnull group_voice_state, Tox_Group_Voice_State voice_state)
 {
     assert(group_voice_state != nullptr);
     group_voice_state->voice_state = voice_state;
@@ -53,15 +50,13 @@ Tox_Group_Voice_State tox_event_group_voice_state_get_voice_state(const Tox_Even
     return group_voice_state->voice_state;
 }
 
-non_null()
-static void tox_event_group_voice_state_construct(Tox_Event_Group_Voice_State *group_voice_state)
+static void tox_event_group_voice_state_construct(Tox_Event_Group_Voice_State *_Nonnull group_voice_state)
 {
     *group_voice_state = (Tox_Event_Group_Voice_State) {
         0
     };
 }
-non_null()
-static void tox_event_group_voice_state_destruct(Tox_Event_Group_Voice_State *group_voice_state, const Memory *mem)
+static void tox_event_group_voice_state_destruct(Tox_Event_Group_Voice_State *_Nonnull group_voice_state, const Memory *_Nonnull mem)
 {
     return;
 }
@@ -74,9 +69,7 @@ bool tox_event_group_voice_state_pack(
            && tox_group_voice_state_pack(event->voice_state, bp);
 }
 
-non_null()
-static bool tox_event_group_voice_state_unpack_into(
-    Tox_Event_Group_Voice_State *event, Bin_Unpack *bu)
+static bool tox_event_group_voice_state_unpack_into(Tox_Event_Group_Voice_State *_Nonnull event, Bin_Unpack *_Nonnull bu)
 {
     assert(event != nullptr);
     if (!bin_unpack_array_fixed(bu, 2, nullptr)) {
@@ -114,13 +107,12 @@ Tox_Event_Group_Voice_State *tox_event_group_voice_state_new(const Memory *mem)
 void tox_event_group_voice_state_free(Tox_Event_Group_Voice_State *group_voice_state, const Memory *mem)
 {
     if (group_voice_state != nullptr) {
-        tox_event_group_voice_state_destruct(group_voice_state, mem);
+        tox_event_group_voice_state_destruct((Tox_Event_Group_Voice_State * _Nonnull)group_voice_state, mem);
     }
     mem_delete(mem, group_voice_state);
 }
 
-non_null()
-static Tox_Event_Group_Voice_State *tox_events_add_group_voice_state(Tox_Events *events, const Memory *mem)
+static Tox_Event_Group_Voice_State *tox_events_add_group_voice_state(Tox_Events *_Nonnull events, const Memory *_Nonnull mem)
 {
     Tox_Event_Group_Voice_State *const group_voice_state = tox_event_group_voice_state_new(mem);
 
@@ -132,7 +124,10 @@ static Tox_Event_Group_Voice_State *tox_events_add_group_voice_state(Tox_Events 
     event.type = TOX_EVENT_GROUP_VOICE_STATE;
     event.data.group_voice_state = group_voice_state;
 
-    tox_events_add(events, &event);
+    if (!tox_events_add(events, &event)) {
+        tox_event_group_voice_state_free(group_voice_state, mem);
+        return nullptr;
+    }
     return group_voice_state;
 }
 
@@ -150,12 +145,8 @@ bool tox_event_group_voice_state_unpack(
     return tox_event_group_voice_state_unpack_into(*event, bu);
 }
 
-non_null()
-static Tox_Event_Group_Voice_State *tox_event_group_voice_state_alloc(void *user_data)
+static Tox_Event_Group_Voice_State *tox_event_group_voice_state_alloc(Tox_Events_State *_Nonnull state)
 {
-    Tox_Events_State *state = tox_events_alloc(user_data);
-    assert(state != nullptr);
-
     if (state->events == nullptr) {
         return nullptr;
     }
@@ -180,7 +171,8 @@ void tox_events_handle_group_voice_state(
     Tox *tox, uint32_t group_number, Tox_Group_Voice_State voice_state,
     void *user_data)
 {
-    Tox_Event_Group_Voice_State *group_voice_state = tox_event_group_voice_state_alloc(user_data);
+    Tox_Events_State *state = tox_events_alloc(user_data);
+    Tox_Event_Group_Voice_State *group_voice_state = tox_event_group_voice_state_alloc(state);
 
     if (group_voice_state == nullptr) {
         return;

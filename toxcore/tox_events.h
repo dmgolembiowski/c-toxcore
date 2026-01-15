@@ -1,9 +1,19 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2022-2024 The TokTok team.
+ * Copyright © 2022-2025 The TokTok team.
+ */
+
+/**
+ * WARNING: This is an experimental API and is subject to change.
+ *
+ * At this point, it probably won't change very much anymore, but we may have
+ * small breaking changes before a stable release.
  */
 
 #ifndef C_TOXCORE_TOXCORE_TOX_EVENTS_H
 #define C_TOXCORE_TOXCORE_TOX_EVENTS_H
+
+#include <stdbool.h>
+#include <stdint.h>
 
 #include "tox.h"
 
@@ -248,7 +258,7 @@ uint32_t tox_event_group_message_get_group_number(
     const Tox_Event_Group_Message *group_message);
 uint32_t tox_event_group_message_get_peer_id(
     const Tox_Event_Group_Message *group_message);
-Tox_Message_Type tox_event_group_message_get_type(
+Tox_Message_Type tox_event_group_message_get_message_type(
     const Tox_Event_Group_Message *group_message);
 const uint8_t *tox_event_group_message_get_message(
     const Tox_Event_Group_Message *group_message);
@@ -262,7 +272,7 @@ uint32_t tox_event_group_private_message_get_group_number(
     const Tox_Event_Group_Private_Message *group_private_message);
 uint32_t tox_event_group_private_message_get_peer_id(
     const Tox_Event_Group_Private_Message *group_private_message);
-Tox_Message_Type tox_event_group_private_message_get_type(
+Tox_Message_Type tox_event_group_private_message_get_message_type(
     const Tox_Event_Group_Private_Message *group_private_message);
 const uint8_t *tox_event_group_private_message_get_message(
     const Tox_Event_Group_Private_Message *group_private_message);
@@ -345,15 +355,15 @@ uint32_t tox_event_group_moderation_get_target_peer_id(
 Tox_Group_Mod_Event tox_event_group_moderation_get_mod_type(
     const Tox_Event_Group_Moderation *group_moderation);
 
-typedef struct Tox_Event_Dht_Get_Nodes_Response Tox_Event_Dht_Get_Nodes_Response;
-const uint8_t *tox_event_dht_get_nodes_response_get_public_key(
-    const Tox_Event_Dht_Get_Nodes_Response *dht_get_nodes_response);
-const uint8_t *tox_event_dht_get_nodes_response_get_ip(
-    const Tox_Event_Dht_Get_Nodes_Response *dht_get_nodes_response);
-uint32_t tox_event_dht_get_nodes_response_get_ip_length(
-    const Tox_Event_Dht_Get_Nodes_Response *dht_get_nodes_response);
-uint16_t tox_event_dht_get_nodes_response_get_port(
-    const Tox_Event_Dht_Get_Nodes_Response *dht_get_nodes_response);
+typedef struct Tox_Event_Dht_Nodes_Response Tox_Event_Dht_Nodes_Response;
+const uint8_t *tox_event_dht_nodes_response_get_public_key(
+    const Tox_Event_Dht_Nodes_Response *dht_nodes_response);
+const uint8_t *tox_event_dht_nodes_response_get_ip(
+    const Tox_Event_Dht_Nodes_Response *dht_nodes_response);
+uint32_t tox_event_dht_nodes_response_get_ip_length(
+    const Tox_Event_Dht_Nodes_Response *dht_nodes_response);
+uint16_t tox_event_dht_nodes_response_get_port(
+    const Tox_Event_Dht_Nodes_Response *dht_nodes_response);
 
 typedef enum Tox_Event_Type {
     TOX_EVENT_SELF_CONNECTION_STATUS        = 0,
@@ -403,7 +413,7 @@ typedef enum Tox_Event_Type {
     TOX_EVENT_GROUP_JOIN_FAIL               = 37,
     TOX_EVENT_GROUP_MODERATION              = 38,
 
-    TOX_EVENT_DHT_GET_NODES_RESPONSE        = 39,
+    TOX_EVENT_DHT_NODES_RESPONSE            = 39,
 
     TOX_EVENT_INVALID                       = 255,
 } Tox_Event_Type;
@@ -500,7 +510,7 @@ const Tox_Event_Group_Join_Fail *tox_event_get_group_join_fail(
     const Tox_Event *event);
 const Tox_Event_Group_Moderation *tox_event_get_group_moderation(
     const Tox_Event *event);
-const Tox_Event_Dht_Get_Nodes_Response *tox_event_get_dht_get_nodes_response(
+const Tox_Event_Dht_Nodes_Response *tox_event_get_dht_nodes_response(
     const Tox_Event *event);
 
 /**
@@ -569,6 +579,8 @@ void tox_events_free(Tox_Events *events);
 
 uint32_t tox_events_bytes_size(const Tox_Events *events);
 bool tox_events_get_bytes(const Tox_Events *events, uint8_t *bytes);
+
+typedef struct Tox_System Tox_System;
 
 Tox_Events *tox_events_load(const Tox_System *sys, const uint8_t *bytes, uint32_t bytes_size);
 

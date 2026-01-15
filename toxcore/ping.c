@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2016-2018 The TokTok team.
+ * Copyright © 2016-2025 The TokTok team.
  * Copyright © 2013 Tox project.
  * Copyright © 2013 plutooo
  */
@@ -29,11 +29,13 @@
 #define TIME_TO_PING 2
 
 struct Ping {
-    const Mono_Time *mono_time;
-    const Random *rng;
-    DHT *dht;
+    const Mono_Time *_Nonnull mono_time;
+    const Random *_Nonnull rng;
+    const Memory *_Nonnull mem;
+    DHT *_Nonnull dht;
+    Networking_Core *_Nonnull net;
 
-    Ping_Array  *ping_array;
+    Ping_Array  *_Nonnull ping_array;
     Node_format to_ping[MAX_TO_PING];
     uint64_t    last_to_ping;
 };
@@ -72,7 +74,7 @@ void ping_send_request(Ping *ping, const IP_Port *ipp, const uint8_t *public_key
     pk_copy(pk + 1, dht_get_self_public_key(ping->dht));     // Our pubkey
     random_nonce(ping->rng, pk + 1 + CRYPTO_PUBLIC_KEY_SIZE); // Generate new nonce
 
-    rc = encrypt_data_symmetric(shared_key,
+    rc = encrypt_data_symmetric(ping->mem, shared_key,
                                 pk + 1 + CRYPTO_PUBLIC_KEY_SIZE,
                                 ping_plain, sizeof(ping_plain),
                                 pk + 1 + CRYPTO_PUBLIC_KEY_SIZE + CRYPTO_NONCE_SIZE);
@@ -82,12 +84,10 @@ void ping_send_request(Ping *ping, const IP_Port *ipp, const uint8_t *public_key
     }
 
     // We never check this return value and failures in sendpacket are already logged
-    sendpacket(dht_get_net(ping->dht), ipp, pk, sizeof(pk));
+    sendpacket(ping->net, ipp, pk, sizeof(pk));
 }
 
-non_null()
-static int ping_send_response(const Ping *ping, const IP_Port *ipp, const uint8_t *public_key,
-                              uint64_t ping_id, const uint8_t *shared_encryption_key)
+static int ping_send_response(const Ping *_Nonnull ping, const IP_Port *_Nonnull ipp, const uint8_t *_Nonnull public_key, uint64_t ping_id, const uint8_t *_Nonnull shared_encryption_key)
 {
     uint8_t pk[DHT_PING_SIZE];
 
@@ -104,7 +104,7 @@ static int ping_send_response(const Ping *ping, const IP_Port *ipp, const uint8_
     random_nonce(ping->rng, pk + 1 + CRYPTO_PUBLIC_KEY_SIZE); // Generate new nonce
 
     // Encrypt ping_id using recipient privkey
-    const int rc = encrypt_data_symmetric(shared_encryption_key,
+    const int rc = encrypt_data_symmetric(ping->mem, shared_encryption_key,
                                           pk + 1 + CRYPTO_PUBLIC_KEY_SIZE,
                                           ping_plain, sizeof(ping_plain),
                                           pk + 1 + CRYPTO_PUBLIC_KEY_SIZE + CRYPTO_NONCE_SIZE);
@@ -113,12 +113,10 @@ static int ping_send_response(const Ping *ping, const IP_Port *ipp, const uint8_
         return 1;
     }
 
-    return sendpacket(dht_get_net(ping->dht), ipp, pk, sizeof(pk));
+    return sendpacket(ping->net, ipp, pk, sizeof(pk));
 }
 
-non_null()
-static int handle_ping_request(void *object, const IP_Port *source, const uint8_t *packet, uint16_t length,
-                               void *userdata)
+static int handle_ping_request(void *_Nonnull object, const IP_Port *_Nonnull source, const uint8_t *_Nonnull packet, uint16_t length, void *_Nonnull userdata)
 {
     DHT *dht = (DHT *)object;
 
@@ -137,7 +135,7 @@ static int handle_ping_request(void *object, const IP_Port *source, const uint8_
     uint8_t ping_plain[PING_PLAIN_SIZE];
 
     // Decrypt ping_id
-    const int rc = decrypt_data_symmetric(shared_key,
+    const int rc = decrypt_data_symmetric(ping->mem, shared_key,
                                           packet + 1 + CRYPTO_PUBLIC_KEY_SIZE,
                                           packet + 1 + CRYPTO_PUBLIC_KEY_SIZE + CRYPTO_NONCE_SIZE,
                                           PING_PLAIN_SIZE + CRYPTO_MAC_SIZE,
@@ -160,9 +158,7 @@ static int handle_ping_request(void *object, const IP_Port *source, const uint8_
     return 0;
 }
 
-non_null()
-static int handle_ping_response(void *object, const IP_Port *source, const uint8_t *packet, uint16_t length,
-                                void *userdata)
+static int handle_ping_response(void *_Nonnull object, const IP_Port *_Nonnull source, const uint8_t *_Nonnull packet, uint16_t length, void *_Nonnull userdata)
 {
     DHT      *dht = (DHT *)object;
     int       rc;
@@ -182,7 +178,7 @@ static int handle_ping_response(void *object, const IP_Port *source, const uint8
 
     uint8_t ping_plain[PING_PLAIN_SIZE];
     // Decrypt ping_id
-    rc = decrypt_data_symmetric(shared_key,
+    rc = decrypt_data_symmetric(ping->mem, shared_key,
                                 packet + 1 + CRYPTO_PUBLIC_KEY_SIZE,
                                 packet + 1 + CRYPTO_PUBLIC_KEY_SIZE + CRYPTO_NONCE_SIZE,
                                 PING_PLAIN_SIZE + CRYPTO_MAC_SIZE,
@@ -224,9 +220,7 @@ static int handle_ping_response(void *object, const IP_Port *source, const uint8
  * return true if it is.
  * return false if it isn't.
  */
-non_null()
-static bool in_list(const Client_data *list, uint16_t length, const Mono_Time *mono_time, const uint8_t *public_key,
-                    const IP_Port *ip_port)
+static bool in_list(const Client_data *_Nonnull list, uint16_t length, const Mono_Time *_Nonnull mono_time, const uint8_t *_Nonnull public_key, const IP_Port *_Nonnull ip_port)
 {
     for (unsigned int i = 0; i < length; ++i) {
         if (pk_equal(list[i].public_key, public_key)) {
@@ -331,7 +325,7 @@ void ping_iterate(Ping *ping)
     }
 }
 
-Ping *ping_new(const Memory *mem, const Mono_Time *mono_time, const Random *rng, DHT *dht)
+Ping *ping_new(const Memory *mem, const Mono_Time *mono_time, const Random *rng, DHT *dht, Networking_Core *net)
 {
     Ping *ping = (Ping *)mem_alloc(mem, sizeof(Ping));
 
@@ -339,18 +333,21 @@ Ping *ping_new(const Memory *mem, const Mono_Time *mono_time, const Random *rng,
         return nullptr;
     }
 
-    ping->ping_array = ping_array_new(mem, PING_NUM_MAX, PING_TIMEOUT);
+    Ping_Array *const ping_array = ping_array_new(mem, PING_NUM_MAX, PING_TIMEOUT);
 
-    if (ping->ping_array == nullptr) {
+    if (ping_array == nullptr) {
         mem_delete(mem, ping);
         return nullptr;
     }
+    ping->ping_array = ping_array;
 
     ping->mono_time = mono_time;
     ping->rng = rng;
+    ping->mem = mem;
     ping->dht = dht;
-    networking_registerhandler(dht_get_net(ping->dht), NET_PACKET_PING_REQUEST, &handle_ping_request, dht);
-    networking_registerhandler(dht_get_net(ping->dht), NET_PACKET_PING_RESPONSE, &handle_ping_response, dht);
+    ping->net = net;
+    networking_registerhandler(ping->net, NET_PACKET_PING_REQUEST, &handle_ping_request, dht);
+    networking_registerhandler(ping->net, NET_PACKET_PING_RESPONSE, &handle_ping_response, dht);
 
     return ping;
 }
@@ -361,8 +358,8 @@ void ping_kill(const Memory *mem, Ping *ping)
         return;
     }
 
-    networking_registerhandler(dht_get_net(ping->dht), NET_PACKET_PING_REQUEST, nullptr, nullptr);
-    networking_registerhandler(dht_get_net(ping->dht), NET_PACKET_PING_RESPONSE, nullptr, nullptr);
+    networking_registerhandler(ping->net, NET_PACKET_PING_REQUEST, nullptr, nullptr);
+    networking_registerhandler(ping->net, NET_PACKET_PING_RESPONSE, nullptr, nullptr);
     ping_array_kill(ping->ping_array);
 
     mem_delete(mem, ping);

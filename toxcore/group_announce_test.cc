@@ -1,20 +1,26 @@
+// clang-format off
+#include "../testing/support/public/simulated_environment.hh"
 #include "group_announce.h"
+// clang-format on
 
 #include <gtest/gtest.h>
 
 #include "DHT.h"
 #include "crypto_core.h"
 #include "logger.h"
-#include "mem_test_util.hh"
 #include "mono_time.h"
+#include "mono_time_test_util.hh"
 #include "network.h"
 
 namespace {
 
+using tox::test::FakeClock;
+using tox::test::SimulatedEnvironment;
+
 struct Announces : ::testing::Test {
 protected:
-    Test_Memory mem_;
-    uint64_t clock_ = 1000;
+    SimulatedEnvironment env;
+    Memory c_mem_;
     Mono_Time *mono_time_ = nullptr;
     GC_Announces_List *gca_ = nullptr;
     GC_Announce _ann1;
@@ -22,24 +28,24 @@ protected:
 
     void SetUp() override
     {
-        mono_time_ = mono_time_new(mem_, nullptr, nullptr);
+        c_mem_ = env.fake_memory().c_memory();
+        mono_time_ = mono_time_new(&c_mem_, nullptr, nullptr);
         ASSERT_NE(mono_time_, nullptr);
-        mono_time_set_current_time_callback(
-            mono_time_, [](void *user_data) { return *static_cast<uint64_t *>(user_data); },
-            &clock_);
-        gca_ = new_gca_list();
+        setup_fake_clock(mono_time_, env.fake_clock());
+
+        gca_ = new_gca_list(&c_mem_);
         ASSERT_NE(gca_, nullptr);
     }
 
     ~Announces() override
     {
         kill_gca(gca_);
-        mono_time_free(mem_, mono_time_);
+        mono_time_free(&c_mem_, mono_time_);
     }
 
-    void advance_clock(uint64_t increment)
+    void advance_clock(std::uint64_t increment)
     {
-        clock_ += increment;
+        env.fake_clock().advance(increment);
         mono_time_update(mono_time_);
     }
 };
@@ -54,10 +60,10 @@ TEST_F(Announces, CanBeCreatedAndDeleted)
 {
     GC_Public_Announce ann{};
     ann.chat_public_key[0] = 0x88;
-    ASSERT_NE(gca_add_announce(mono_time_, gca_, &ann), nullptr);
-#ifndef _DEBUG
-    ASSERT_EQ(gca_add_announce(mono_time_, gca_, nullptr), nullptr);
-    ASSERT_EQ(gca_add_announce(mono_time_, nullptr, &ann), nullptr);
+    ASSERT_NE(gca_add_announce(&c_mem_, mono_time_, gca_, &ann), nullptr);
+#ifndef __clang__
+    ASSERT_EQ(gca_add_announce(&c_mem_, mono_time_, gca_, nullptr), nullptr);
+    ASSERT_EQ(gca_add_announce(&c_mem_, mono_time_, nullptr, &ann), nullptr);
 #endif
 }
 
@@ -67,7 +73,7 @@ TEST_F(Announces, AnnouncesCanTimeOut)
     ASSERT_EQ(gca_->root_announces, nullptr);
     GC_Public_Announce ann{};
     ann.chat_public_key[0] = 0xae;
-    ASSERT_NE(gca_add_announce(mono_time_, gca_, &ann), nullptr);
+    ASSERT_NE(gca_add_announce(&c_mem_, mono_time_, gca_, &ann), nullptr);
     ASSERT_NE(gca_->root_announces, nullptr);
     ASSERT_EQ(gca_->root_announces->chat_id[0], 0xae);
 
@@ -95,11 +101,11 @@ TEST_F(Announces, AnnouncesGetAndCleanup)
     ann2.chat_public_key[0] = 0x92;
     ann2.base_announce.peer_public_key[0] = 0x7c;
 
-    ASSERT_NE(gca_add_announce(mono_time_, gca_, &ann1), nullptr);
-    ASSERT_NE(gca_add_announce(mono_time_, gca_, &ann2), nullptr);
-    ASSERT_NE(gca_add_announce(mono_time_, gca_, &ann2), nullptr);
+    ASSERT_NE(gca_add_announce(&c_mem_, mono_time_, gca_, &ann1), nullptr);
+    ASSERT_NE(gca_add_announce(&c_mem_, mono_time_, gca_, &ann2), nullptr);
+    ASSERT_NE(gca_add_announce(&c_mem_, mono_time_, gca_, &ann2), nullptr);
 
-    uint8_t empty_pk[ENC_PUBLIC_KEY_SIZE] = {0};
+    std::uint8_t empty_pk[ENC_PUBLIC_KEY_SIZE] = {0};
 
     GC_Announce announces;
     ASSERT_EQ(gca_get_announces(gca_, &announces, 1, ann1.chat_public_key, empty_pk), 1);
@@ -110,19 +116,22 @@ TEST_F(Announces, AnnouncesGetAndCleanup)
 
     cleanup_gca(gca_, ann2.chat_public_key);
     ASSERT_EQ(gca_get_announces(gca_, &announces, 1, ann2.chat_public_key, empty_pk), 0);
-#ifndef _DEBUG
+#ifndef __clang__
     ASSERT_EQ(gca_get_announces(gca_, nullptr, 1, ann2.chat_public_key, empty_pk), -1);
 #endif
 }
 
 struct AnnouncesPack : ::testing::Test {
 protected:
+    SimulatedEnvironment env;
+    Memory c_mem_;
     std::vector<GC_Announce> announces_;
     Logger *logger_ = nullptr;
 
     void SetUp() override
     {
-        logger_ = logger_new();
+        c_mem_ = env.fake_memory().c_memory();
+        logger_ = logger_new(&c_mem_);
         ASSERT_NE(logger_, nullptr);
 
         // Add an announce without TCP relay.
@@ -159,7 +168,7 @@ TEST_F(AnnouncesPack, PublicAnnounceCanBePackedAndUnpacked)
     ann.chat_public_key[0] = 0x88;
     ann.base_announce = announces_[0];
 
-    std::vector<uint8_t> packed(GCA_PUBLIC_ANNOUNCE_MAX_SIZE);
+    std::vector<std::uint8_t> packed(GCA_PUBLIC_ANNOUNCE_MAX_SIZE);
     const int packed_size = gca_pack_public_announce(logger_, packed.data(), packed.size(), &ann);
 
     EXPECT_GT(packed_size, 0);
@@ -171,9 +180,9 @@ TEST_F(AnnouncesPack, PublicAnnounceCanBePackedAndUnpacked)
 
 TEST_F(AnnouncesPack, UnpackEmptyPublicAnnounce)
 {
-#ifndef _DEBUG
+#ifndef __clang__
     GC_Public_Announce ann{};
-    std::vector<uint8_t> packed(GCA_PUBLIC_ANNOUNCE_MAX_SIZE);
+    std::vector<std::uint8_t> packed(GCA_PUBLIC_ANNOUNCE_MAX_SIZE);
 
     EXPECT_EQ(gca_unpack_public_announce(logger_, nullptr, 0, &ann), -1);
     EXPECT_EQ(gca_unpack_public_announce(logger_, packed.data(), packed.size(), nullptr), -1);
@@ -182,9 +191,9 @@ TEST_F(AnnouncesPack, UnpackEmptyPublicAnnounce)
 
 TEST_F(AnnouncesPack, PackEmptyPublicAnnounce)
 {
-#ifndef _DEBUG
+#ifndef __clang__
     GC_Public_Announce ann{};
-    std::vector<uint8_t> packed(GCA_PUBLIC_ANNOUNCE_MAX_SIZE);
+    std::vector<std::uint8_t> packed(GCA_PUBLIC_ANNOUNCE_MAX_SIZE);
     EXPECT_EQ(gca_pack_public_announce(logger_, packed.data(), packed.size(), nullptr), -1);
     EXPECT_EQ(gca_pack_public_announce(logger_, nullptr, 0, &ann), -1);
 #endif
@@ -193,13 +202,13 @@ TEST_F(AnnouncesPack, PackEmptyPublicAnnounce)
 TEST_F(AnnouncesPack, PublicAnnouncePackNull)
 {
     GC_Public_Announce ann{};
-    std::vector<uint8_t> packed(GCA_PUBLIC_ANNOUNCE_MAX_SIZE);
+    std::vector<std::uint8_t> packed(GCA_PUBLIC_ANNOUNCE_MAX_SIZE);
     EXPECT_EQ(gca_pack_public_announce(logger_, packed.data(), packed.size(), &ann), -1);
 
     ann.chat_public_key[0] = 0x88;
     ann.base_announce = announces_[0];
 
-    std::vector<uint8_t> packedTooSmall(GCA_PUBLIC_ANNOUNCE_MAX_SIZE - 1);
+    std::vector<std::uint8_t> packedTooSmall(GCA_PUBLIC_ANNOUNCE_MAX_SIZE - 1);
     EXPECT_EQ(
         gca_pack_public_announce(logger_, packedTooSmall.data(), packedTooSmall.size(), &ann), -1);
 
@@ -211,7 +220,7 @@ TEST_F(AnnouncesPack, PublicAnnouncePackNull)
 
 TEST_F(AnnouncesPack, AnnouncesValidationCheck)
 {
-#ifndef _DEBUG
+#ifndef __clang__
     EXPECT_EQ(gca_is_valid_announce(nullptr), false);
 #endif
 
@@ -226,13 +235,13 @@ TEST_F(AnnouncesPack, AnnouncesValidationCheck)
 
 TEST_F(AnnouncesPack, UnpackIncompleteAnnouncesList)
 {
-    const uint8_t data[] = {0x00, 0x24, 0x3d, 0x00, 0x3d, 0xff, 0xff, 0x5b, 0x04, 0x20, 0x00, 0x01,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00};
+    const std::uint8_t data[] = {0x00, 0x24, 0x3d, 0x00, 0x3d, 0xff, 0xff, 0x5b, 0x04, 0x20, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00};
 
     GC_Announce announce;
     EXPECT_EQ(gca_unpack_announces_list(logger_, data, sizeof(data), &announce, 1), -1);
-#ifndef _DEBUG
+#ifndef __clang__
     EXPECT_EQ(gca_unpack_announces_list(logger_, data, sizeof(data), nullptr, 1), -1);
     EXPECT_EQ(gca_unpack_announces_list(logger_, nullptr, 0, &announce, 1), -1);
 #endif
@@ -240,10 +249,10 @@ TEST_F(AnnouncesPack, UnpackIncompleteAnnouncesList)
 
 TEST_F(AnnouncesPack, PackedAnnouncesListCanBeUnpacked)
 {
-    const uint16_t size = gca_pack_announces_list_size(announces_.size());
-    std::vector<uint8_t> packed(size);
+    const std::uint16_t size = gca_pack_announces_list_size(announces_.size());
+    std::vector<std::uint8_t> packed(size);
 
-    size_t processed = 0;
+    std::size_t processed = 0;
 
     EXPECT_GT(gca_pack_announces_list(logger_, packed.data(), packed.size(), announces_.data(),
                   announces_.size(), &processed),
@@ -260,10 +269,10 @@ TEST_F(AnnouncesPack, PackedAnnouncesListCanBeUnpacked)
 TEST_F(AnnouncesPack, PackingEmptyAnnounceFails)
 {
     GC_Announce announce{};  // all zeroes
-    std::vector<uint8_t> packed(gca_pack_announces_list_size(1));
+    std::vector<std::uint8_t> packed(gca_pack_announces_list_size(1));
     EXPECT_EQ(
         gca_pack_announces_list(logger_, packed.data(), packed.size(), &announce, 1, nullptr), -1);
-#ifndef _DEBUG
+#ifndef __clang__
     EXPECT_EQ(
         gca_pack_announces_list(logger_, packed.data(), packed.size(), nullptr, 1, nullptr), -1);
     EXPECT_EQ(gca_pack_announces_list(logger_, nullptr, 0, &announce, 1, nullptr), -1);
@@ -272,8 +281,8 @@ TEST_F(AnnouncesPack, PackingEmptyAnnounceFails)
 
 TEST_F(AnnouncesPack, PackAnnounceNull)
 {
-#ifndef _DEBUG
-    std::vector<uint8_t> data(GCA_ANNOUNCE_MAX_SIZE);
+#ifndef __clang__
+    std::vector<std::uint8_t> data(GCA_ANNOUNCE_MAX_SIZE);
     GC_Announce announce;
     ASSERT_EQ(gca_pack_announce(logger_, nullptr, 0, &announce), -1);
     ASSERT_EQ(gca_pack_announce(logger_, data.data(), data.size(), nullptr), -1);

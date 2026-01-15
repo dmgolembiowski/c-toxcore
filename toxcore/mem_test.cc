@@ -2,12 +2,14 @@
 
 #include <gtest/gtest.h>
 
+#include "os_memory.h"
+
 namespace {
 
 TEST(Mem, AllocLarge)
 {
     // Mebi prefix: https://en.wikipedia.org/wiki/Binary_prefix.
-    constexpr uint32_t MI = 1024 * 1024;
+    constexpr std::uint32_t MI = 1024 * 1024;
 
     const Memory *mem = os_memory();
 
@@ -20,7 +22,7 @@ TEST(Mem, AllocLarge)
 TEST(Mem, AllocOverflow)
 {
     // Gibi prefix.
-    constexpr uint32_t GI = 1024 * 1024 * 1024;
+    constexpr std::uint32_t GI = 1024 * 1024 * 1024;
 
     const Memory *mem = os_memory();
 

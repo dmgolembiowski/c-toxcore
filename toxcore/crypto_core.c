@@ -1,18 +1,19 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2016-2024 The TokTok team.
+ * Copyright © 2016-2025 The TokTok team.
  * Copyright © 2013 Tox project.
  */
 
 #include "crypto_core.h"
 
 #include <assert.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include <sodium.h>
 
 #include "attributes.h"
 #include "ccompat.h"
+#include "mem.h"
+#include "rng.h"
 #include "util.h"
 
 static_assert(CRYPTO_PUBLIC_KEY_SIZE == crypto_box_PUBLICKEYBYTES,
@@ -88,9 +89,9 @@ const uint8_t *get_chat_id(const Extended_Public_Key *key)
 }
 
 #if !defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION)
-static uint8_t *crypto_malloc(size_t bytes)
+static uint8_t *crypto_malloc(const Memory *_Nonnull mem, size_t bytes)
 {
-    uint8_t *ptr = (uint8_t *)malloc(bytes);
+    uint8_t *ptr = (uint8_t *)mem_balloc(mem, bytes);
 
     if (ptr != nullptr) {
         crypto_memlock(ptr, bytes);
@@ -99,15 +100,14 @@ static uint8_t *crypto_malloc(size_t bytes)
     return ptr;
 }
 
-nullable(1)
-static void crypto_free(uint8_t *ptr, size_t bytes)
+static void crypto_free(const Memory *_Nonnull mem, uint8_t *_Nullable ptr, size_t bytes)
 {
     if (ptr != nullptr) {
         crypto_memzero(ptr, bytes);
         crypto_memunlock(ptr, bytes);
     }
 
-    free(ptr);
+    mem_delete(mem, ptr);
 }
 #endif /* !defined(FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION) */
 
@@ -142,12 +142,7 @@ bool crypto_memunlock(void *data, size_t length)
 
 bool pk_equal(const uint8_t pk1[CRYPTO_PUBLIC_KEY_SIZE], const uint8_t pk2[CRYPTO_PUBLIC_KEY_SIZE])
 {
-#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-    // Hope that this is better for the fuzzer
     return memcmp(pk1, pk2, CRYPTO_PUBLIC_KEY_SIZE) == 0;
-#else
-    return crypto_verify_32(pk1, pk2) == 0;
-#endif /* FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION */
 }
 
 void pk_copy(uint8_t dest[CRYPTO_PUBLIC_KEY_SIZE], const uint8_t src[CRYPTO_PUBLIC_KEY_SIZE])
@@ -167,12 +162,7 @@ bool crypto_sha512_eq(const uint8_t cksum1[CRYPTO_SHA512_SIZE], const uint8_t ck
 
 bool crypto_sha256_eq(const uint8_t cksum1[CRYPTO_SHA256_SIZE], const uint8_t cksum2[CRYPTO_SHA256_SIZE])
 {
-#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-    // Hope that this is better for the fuzzer
     return memcmp(cksum1, cksum2, CRYPTO_SHA256_SIZE) == 0;
-#else
-    return crypto_verify_32(cksum1, cksum2) == 0;
-#endif /* FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION */
 }
 
 uint8_t random_u08(const Random *rng)
@@ -205,7 +195,7 @@ uint64_t random_u64(const Random *rng)
 
 uint32_t random_range_u32(const Random *rng, uint32_t upper_bound)
 {
-    return rng->funcs->random_uniform(rng->obj, upper_bound);
+    return rng_uniform(rng, upper_bound);
 }
 
 bool crypto_signature_create(uint8_t signature[CRYPTO_SIGNATURE_SIZE],
@@ -240,7 +230,8 @@ int32_t encrypt_precompute(const uint8_t public_key[CRYPTO_PUBLIC_KEY_SIZE],
 #endif /* FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION */
 }
 
-int32_t encrypt_data_symmetric(const uint8_t shared_key[CRYPTO_SHARED_KEY_SIZE],
+int32_t encrypt_data_symmetric(const Memory *mem,
+                               const uint8_t shared_key[CRYPTO_SHARED_KEY_SIZE],
                                const uint8_t nonce[CRYPTO_NONCE_SIZE],
                                const uint8_t *plain, size_t length, uint8_t *encrypted)
 {
@@ -258,12 +249,12 @@ int32_t encrypt_data_symmetric(const uint8_t shared_key[CRYPTO_SHARED_KEY_SIZE],
     const size_t size_temp_plain = length + crypto_box_ZEROBYTES;
     const size_t size_temp_encrypted = length + crypto_box_MACBYTES + crypto_box_BOXZEROBYTES;
 
-    uint8_t *temp_plain = crypto_malloc(size_temp_plain);
-    uint8_t *temp_encrypted = crypto_malloc(size_temp_encrypted);
+    uint8_t *temp_plain = crypto_malloc(mem, size_temp_plain);
+    uint8_t *temp_encrypted = crypto_malloc(mem, size_temp_encrypted);
 
     if (temp_plain == nullptr || temp_encrypted == nullptr) {
-        crypto_free(temp_plain, size_temp_plain);
-        crypto_free(temp_encrypted, size_temp_encrypted);
+        crypto_free(mem, temp_plain, size_temp_plain);
+        crypto_free(mem, temp_encrypted, size_temp_encrypted);
         return -1;
     }
 
@@ -278,22 +269,23 @@ int32_t encrypt_data_symmetric(const uint8_t shared_key[CRYPTO_SHARED_KEY_SIZE],
 
     if (crypto_box_afternm(temp_encrypted, temp_plain, length + crypto_box_ZEROBYTES, nonce,
                            shared_key) != 0) {
-        crypto_free(temp_plain, size_temp_plain);
-        crypto_free(temp_encrypted, size_temp_encrypted);
+        crypto_free(mem, temp_plain, size_temp_plain);
+        crypto_free(mem, temp_encrypted, size_temp_encrypted);
         return -1;
     }
 
     // Unpad the encrypted message.
     memcpy(encrypted, temp_encrypted + crypto_box_BOXZEROBYTES, length + crypto_box_MACBYTES);
 
-    crypto_free(temp_plain, size_temp_plain);
-    crypto_free(temp_encrypted, size_temp_encrypted);
+    crypto_free(mem, temp_plain, size_temp_plain);
+    crypto_free(mem, temp_encrypted, size_temp_encrypted);
 #endif /* FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION */
     assert(length < INT32_MAX - crypto_box_MACBYTES);
     return (int32_t)(length + crypto_box_MACBYTES);
 }
 
-int32_t decrypt_data_symmetric(const uint8_t shared_key[CRYPTO_SHARED_KEY_SIZE],
+int32_t decrypt_data_symmetric(const Memory *mem,
+                               const uint8_t shared_key[CRYPTO_SHARED_KEY_SIZE],
                                const uint8_t nonce[CRYPTO_NONCE_SIZE],
                                const uint8_t *encrypted, size_t length, uint8_t *plain)
 {
@@ -310,12 +302,12 @@ int32_t decrypt_data_symmetric(const uint8_t shared_key[CRYPTO_SHARED_KEY_SIZE],
     const size_t size_temp_plain = length + crypto_box_ZEROBYTES;
     const size_t size_temp_encrypted = length + crypto_box_BOXZEROBYTES;
 
-    uint8_t *temp_plain = crypto_malloc(size_temp_plain);
-    uint8_t *temp_encrypted = crypto_malloc(size_temp_encrypted);
+    uint8_t *temp_plain = crypto_malloc(mem, size_temp_plain);
+    uint8_t *temp_encrypted = crypto_malloc(mem, size_temp_encrypted);
 
     if (temp_plain == nullptr || temp_encrypted == nullptr) {
-        crypto_free(temp_plain, size_temp_plain);
-        crypto_free(temp_encrypted, size_temp_encrypted);
+        crypto_free(mem, temp_plain, size_temp_plain);
+        crypto_free(mem, temp_encrypted, size_temp_encrypted);
         return -1;
     }
 
@@ -330,22 +322,23 @@ int32_t decrypt_data_symmetric(const uint8_t shared_key[CRYPTO_SHARED_KEY_SIZE],
 
     if (crypto_box_open_afternm(temp_plain, temp_encrypted, length + crypto_box_BOXZEROBYTES, nonce,
                                 shared_key) != 0) {
-        crypto_free(temp_plain, size_temp_plain);
-        crypto_free(temp_encrypted, size_temp_encrypted);
+        crypto_free(mem, temp_plain, size_temp_plain);
+        crypto_free(mem, temp_encrypted, size_temp_encrypted);
         return -1;
     }
 
     memcpy(plain, temp_plain + crypto_box_ZEROBYTES, length - crypto_box_MACBYTES);
 
-    crypto_free(temp_plain, size_temp_plain);
-    crypto_free(temp_encrypted, size_temp_encrypted);
+    crypto_free(mem, temp_plain, size_temp_plain);
+    crypto_free(mem, temp_encrypted, size_temp_encrypted);
 #endif /* FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION */
     assert(length > crypto_box_MACBYTES);
     assert(length < INT32_MAX);
     return (int32_t)(length - crypto_box_MACBYTES);
 }
 
-int32_t encrypt_data(const uint8_t public_key[CRYPTO_PUBLIC_KEY_SIZE],
+int32_t encrypt_data(const Memory *mem,
+                     const uint8_t public_key[CRYPTO_PUBLIC_KEY_SIZE],
                      const uint8_t secret_key[CRYPTO_SECRET_KEY_SIZE],
                      const uint8_t nonce[CRYPTO_NONCE_SIZE],
                      const uint8_t *plain, size_t length, uint8_t *encrypted)
@@ -356,12 +349,13 @@ int32_t encrypt_data(const uint8_t public_key[CRYPTO_PUBLIC_KEY_SIZE],
 
     uint8_t k[crypto_box_BEFORENMBYTES];
     encrypt_precompute(public_key, secret_key, k);
-    const int ret = encrypt_data_symmetric(k, nonce, plain, length, encrypted);
+    const int ret = encrypt_data_symmetric(mem, k, nonce, plain, length, encrypted);
     crypto_memzero(k, sizeof(k));
     return ret;
 }
 
-int32_t decrypt_data(const uint8_t public_key[CRYPTO_PUBLIC_KEY_SIZE],
+int32_t decrypt_data(const Memory *mem,
+                     const uint8_t public_key[CRYPTO_PUBLIC_KEY_SIZE],
                      const uint8_t secret_key[CRYPTO_SECRET_KEY_SIZE],
                      const uint8_t nonce[CRYPTO_NONCE_SIZE],
                      const uint8_t *encrypted, size_t length, uint8_t *plain)
@@ -372,7 +366,7 @@ int32_t decrypt_data(const uint8_t public_key[CRYPTO_PUBLIC_KEY_SIZE],
 
     uint8_t k[crypto_box_BEFORENMBYTES];
     encrypt_precompute(public_key, secret_key, k);
-    const int ret = decrypt_data_symmetric(k, nonce, encrypted, length, plain);
+    const int ret = decrypt_data_symmetric(mem, k, nonce, encrypted, length, plain);
     crypto_memzero(k, sizeof(k));
     return ret;
 }
@@ -490,41 +484,7 @@ void crypto_sha512(uint8_t hash[CRYPTO_SHA512_SIZE], const uint8_t *data, size_t
 #endif /* FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION */
 }
 
-non_null()
-static void sys_random_bytes(void *obj, uint8_t *bytes, size_t length)
-{
-    randombytes(bytes, length);
-}
-
-non_null()
-static uint32_t sys_random_uniform(void *obj, uint32_t upper_bound)
-{
-    return randombytes_uniform(upper_bound);
-}
-
-static const Random_Funcs os_random_funcs = {
-    sys_random_bytes,
-    sys_random_uniform,
-};
-
-static const Random os_random_obj = {&os_random_funcs};
-
-const Random *os_random(void)
-{
-#ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-    if ((true)) {
-        return nullptr;
-    }
-#endif /* FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION */
-    // It is safe to call this function more than once and from different
-    // threads -- subsequent calls won't have any effects.
-    if (sodium_init() == -1) {
-        return nullptr;
-    }
-    return &os_random_obj;
-}
-
 void random_bytes(const Random *rng, uint8_t *bytes, size_t length)
 {
-    rng->funcs->random_bytes(rng->obj, bytes, length);
+    rng_bytes(rng, bytes, length);
 }

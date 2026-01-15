@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2016-2018 The TokTok team.
+ * Copyright © 2016-2025 The TokTok team.
  * Copyright © 2015 Tox project.
  */
 
@@ -20,42 +20,46 @@
 #include "logger.h"
 #include "mem.h"
 #include "mono_time.h"
+#include "net_profile.h"
 #include "network.h"
 #include "util.h"
 
 struct TCP_Connections {
-    const Logger *logger;
-    const Memory *mem;
-    const Random *rng;
-    Mono_Time *mono_time;
-    const Network *ns;
-    DHT *dht;
+    const Logger *_Nonnull logger;
+    const Memory *_Nonnull mem;
+    const Random *_Nonnull rng;
+    Mono_Time *_Nonnull mono_time;
+    const Network *_Nonnull ns;
+    DHT *_Nonnull dht;
 
     uint8_t self_public_key[CRYPTO_PUBLIC_KEY_SIZE];
     uint8_t self_secret_key[CRYPTO_SECRET_KEY_SIZE];
 
-    TCP_Connection_to *connections;
+    TCP_Connection_to *_Nullable connections;
     uint32_t connections_length; /* Length of connections array. */
 
-    TCP_con *tcp_connections;
+    TCP_con *_Nullable tcp_connections;
     uint32_t tcp_connections_length; /* Length of tcp_connections array. */
 
-    tcp_data_cb *tcp_data_callback;
-    void *tcp_data_callback_object;
+    tcp_data_cb *_Nullable tcp_data_callback;
+    void *_Nullable tcp_data_callback_object;
 
-    tcp_oob_cb *tcp_oob_callback;
-    void *tcp_oob_callback_object;
+    tcp_oob_cb *_Nullable tcp_oob_callback;
+    void *_Nullable tcp_oob_callback_object;
 
-    tcp_onion_cb *tcp_onion_callback;
-    void *tcp_onion_callback_object;
+    tcp_onion_cb *_Nullable tcp_onion_callback;
+    void *_Nullable tcp_onion_callback_object;
 
-    forwarded_response_cb *tcp_forwarded_response_callback;
-    void *tcp_forwarded_response_callback_object;
+    forwarded_response_cb *_Nullable tcp_forwarded_response_callback;
+    void *_Nullable tcp_forwarded_response_callback_object;
 
     TCP_Proxy_Info proxy_info;
 
     bool onion_status;
     uint16_t onion_num_conns;
+
+    /* Network profile for all TCP client packets. */
+    Net_Profile *_Nullable net_profile;
 };
 
 static const TCP_Connection_to empty_tcp_connection_to = {0};
@@ -71,13 +75,43 @@ uint32_t tcp_connections_count(const TCP_Connections *tcp_c)
     return tcp_c->tcp_connections_length;
 }
 
+/**
+ * Return number of elements of TCP connection array.
+ *
+ * @param tcp_c struct containing TCP_con array.
+ *
+ * @return number of elements of TCP connection array.
+ */
+uint32_t tcp_connections_length(const TCP_Connections *tcp_c)
+{
+    return tcp_c->tcp_connections_length;
+}
+
+
+/**
+ * Return TCP connection stored at "idx" position.
+ *
+ * @param tcp_c struct containing TCP_con array.
+ * @param idx   index of TCP connection to return (values from 0 to `tcp_connections_length() - 1`).
+ *
+ * @return TCP connection stored at "idx" position, or NULL if errors occurred.
+ */
+const TCP_con *tcp_connections_connection_at(const TCP_Connections *tcp_c, uint32_t idx)
+{
+    if (idx >= tcp_c->tcp_connections_length) {
+        return nullptr;
+    }
+
+    return &tcp_c->tcp_connections[idx];
+}
+
+
 /** @brief Set the size of the array to num.
  *
  * @retval -1 if mem_vrealloc fails.
  * @retval 0 if it succeeds.
  */
-non_null()
-static int realloc_tcp_connection_to(const Memory *mem, TCP_Connection_to **array, size_t num)
+static int realloc_tcp_connection_to(const Memory *_Nonnull mem, TCP_Connection_to *_Nullable *array, size_t num)
 {
     if (num == 0) {
         mem_delete(mem, *array);
@@ -97,8 +131,7 @@ static int realloc_tcp_connection_to(const Memory *mem, TCP_Connection_to **arra
     return 0;
 }
 
-non_null()
-static int realloc_tcp_con(const Memory *mem, TCP_con **array, size_t num)
+static int realloc_tcp_con(const Memory *_Nonnull mem, TCP_con *_Nullable *array, size_t num)
 {
     if (num == 0) {
         mem_delete(mem, *array);
@@ -120,8 +153,7 @@ static int realloc_tcp_con(const Memory *mem, TCP_con **array, size_t num)
 /**
  * Return true if the connections_number is valid.
  */
-non_null()
-static bool connections_number_is_valid(const TCP_Connections *tcp_c, int connections_number)
+static bool connections_number_is_valid(const TCP_Connections *_Nonnull tcp_c, int connections_number)
 {
     if ((unsigned int)connections_number >= tcp_c->connections_length) {
         return false;
@@ -137,8 +169,7 @@ static bool connections_number_is_valid(const TCP_Connections *tcp_c, int connec
 /**
  * Return true if the tcp_connections_number is valid.
  */
-non_null()
-static bool tcp_connections_number_is_valid(const TCP_Connections *tcp_c, int tcp_connections_number)
+static bool tcp_connections_number_is_valid(const TCP_Connections *_Nonnull tcp_c, int tcp_connections_number)
 {
     if ((uint32_t)tcp_connections_number >= tcp_c->tcp_connections_length) {
         return false;
@@ -156,8 +187,7 @@ static bool tcp_connections_number_is_valid(const TCP_Connections *tcp_c, int tc
  * return -1 on failure.
  * return connections_number on success.
  */
-non_null()
-static int create_connection(TCP_Connections *tcp_c)
+static int create_connection(TCP_Connections *_Nonnull tcp_c)
 {
     for (uint32_t i = 0; i < tcp_c->connections_length; ++i) {
         if (tcp_c->connections[i].status == TCP_CONN_NONE) {
@@ -181,8 +211,7 @@ static int create_connection(TCP_Connections *tcp_c)
  * return -1 on failure.
  * return tcp_connections_number on success.
  */
-non_null()
-static int create_tcp_connection(TCP_Connections *tcp_c)
+static int create_tcp_connection(TCP_Connections *_Nonnull tcp_c)
 {
     for (uint32_t i = 0; i < tcp_c->tcp_connections_length; ++i) {
         if (tcp_c->tcp_connections[i].status == TCP_CONN_NONE) {
@@ -206,8 +235,7 @@ static int create_tcp_connection(TCP_Connections *tcp_c)
  * return -1 on failure.
  * return 0 on success.
  */
-non_null()
-static int wipe_connection(TCP_Connections *tcp_c, int connections_number)
+static int wipe_connection(TCP_Connections *_Nonnull tcp_c, int connections_number)
 {
     if (!connections_number_is_valid(tcp_c, connections_number)) {
         return -1;
@@ -237,8 +265,7 @@ static int wipe_connection(TCP_Connections *tcp_c, int connections_number)
  * return -1 on failure.
  * return 0 on success.
  */
-non_null()
-static int wipe_tcp_connection(TCP_Connections *tcp_c, int tcp_connections_number)
+static int wipe_tcp_connection(TCP_Connections *_Nonnull tcp_c, int tcp_connections_number)
 {
     if (!tcp_connections_number_is_valid(tcp_c, tcp_connections_number)) {
         return -1;
@@ -264,8 +291,7 @@ static int wipe_tcp_connection(TCP_Connections *tcp_c, int tcp_connections_numbe
     return 0;
 }
 
-non_null()
-static TCP_Connection_to *get_connection(const TCP_Connections *tcp_c, int connections_number)
+static TCP_Connection_to *get_connection(const TCP_Connections *_Nonnull tcp_c, int connections_number)
 {
     if (!connections_number_is_valid(tcp_c, connections_number)) {
         return nullptr;
@@ -274,8 +300,7 @@ static TCP_Connection_to *get_connection(const TCP_Connections *tcp_c, int conne
     return &tcp_c->connections[connections_number];
 }
 
-non_null()
-static TCP_con *get_tcp_connection(const TCP_Connections *tcp_c, int tcp_connections_number)
+static TCP_con *get_tcp_connection(const TCP_Connections *_Nonnull tcp_c, int tcp_connections_number)
 {
     if (!tcp_connections_number_is_valid(tcp_c, tcp_connections_number)) {
         return nullptr;
@@ -337,6 +362,10 @@ int send_packet_tcp_connection(const TCP_Connections *tcp_c, int connections_num
                 continue;
             }
 
+            if (tcp_con->connection == nullptr) {
+                LOGGER_ERROR(tcp_c->logger, "TCP connection is null for connection number %u", tcp_con_num);
+                continue;
+            }
             ret = send_data(tcp_c->logger, tcp_con->connection, connection_id, packet, length);
 
             if (ret == 0) {
@@ -372,6 +401,10 @@ int send_packet_tcp_connection(const TCP_Connections *tcp_c, int connections_num
                 continue;
             }
 
+            if (tcp_con->connection == nullptr) {
+                LOGGER_ERROR(tcp_c->logger, "TCP connection is null for connection number %u", tcp_con_num);
+                continue;
+            }
             if (send_oob_packet(tcp_c->logger, tcp_con->connection, con_to->public_key, packet, length) == 1) {
                 sent_any = true;
             }
@@ -409,10 +442,13 @@ int get_random_tcp_onion_conn_number(const TCP_Connections *tcp_c)
  * return TCP connection number on success.
  * return -1 on failure.
  */
-non_null()
-static int get_conn_number_by_ip_port(const TCP_Connections *tcp_c, const IP_Port *ip_port)
+static int get_conn_number_by_ip_port(const TCP_Connections *_Nonnull tcp_c, const IP_Port *_Nonnull ip_port)
 {
     for (uint32_t i = 0; i < tcp_c->tcp_connections_length; ++i) {
+        if (tcp_c->tcp_connections[i].connection == nullptr) {
+            LOGGER_ERROR(tcp_c->logger, "TCP connection is null for connection index %u", i);
+            continue;
+        }
         const IP_Port conn_ip_port = tcp_con_ip_port(tcp_c->tcp_connections[i].connection);
 
         if (ipport_equal(ip_port, &conn_ip_port) &&
@@ -437,6 +473,10 @@ bool tcp_get_random_conn_ip_port(const TCP_Connections *tcp_c, IP_Port *ip_port)
         return false;
     }
 
+    if (tcp_c->tcp_connections[index].connection == nullptr) {
+        LOGGER_ERROR(tcp_c->logger, "TCP connection is null for connection index %d", index);
+        return false;
+    }
     *ip_port = tcp_con_ip_port(tcp_c->tcp_connections[index].connection);
     return true;
 }
@@ -454,6 +494,10 @@ int tcp_send_onion_request(TCP_Connections *tcp_c, uint32_t tcp_connections_numb
     }
 
     if (tcp_c->tcp_connections[tcp_connections_number].status == TCP_CONN_CONNECTED) {
+        if (tcp_c->tcp_connections[tcp_connections_number].connection == nullptr) {
+            LOGGER_ERROR(tcp_c->logger, "TCP connection is null for connection number %u", tcp_connections_number);
+            return -1;
+        }
         const int ret = send_onion_request(tcp_c->logger, tcp_c->tcp_connections[tcp_connections_number].connection, data,
                                            length);
 
@@ -484,6 +528,10 @@ int tcp_send_forward_request(const Logger *logger, TCP_Connections *tcp_c, const
     }
 
     if (chain_length == 0) {
+        if (tcp_c->tcp_connections[index].connection == nullptr) {
+            LOGGER_ERROR(tcp_c->logger, "TCP connection is null for connection index %d", index);
+            return -1;
+        }
         return send_forward_request_tcp(logger, tcp_c->tcp_connections[index].connection, dht_node, data,
                                         data_length) == 1 ? 0 : -1;
     }
@@ -491,6 +539,10 @@ int tcp_send_forward_request(const Logger *logger, TCP_Connections *tcp_c, const
     const uint16_t len = forward_chain_packet_size(chain_length, data_length);
     VLA(uint8_t, packet, len);
 
+    if (tcp_c->tcp_connections[index].connection == nullptr) {
+        LOGGER_ERROR(tcp_c->logger, "TCP connection is null for connection index %d", index);
+        return -1;
+    }
     return create_forward_chain_packet(chain_keys, chain_length, data, data_length, packet)
            && send_forward_request_tcp(logger, tcp_c->tcp_connections[index].connection, dht_node, packet, len) == 1 ? 0 : -1;
 }
@@ -513,6 +565,10 @@ int tcp_send_oob_packet(const TCP_Connections *tcp_c, unsigned int tcp_connectio
         return -1;
     }
 
+    if (tcp_con->connection == nullptr) {
+        LOGGER_ERROR(tcp_c->logger, "TCP connection is null for tcp_con");
+        return -1;
+    }
     const int ret = send_oob_packet(tcp_c->logger, tcp_con->connection, public_key, packet, length);
 
     if (ret == 1) {
@@ -522,8 +578,7 @@ int tcp_send_oob_packet(const TCP_Connections *tcp_c, unsigned int tcp_connectio
     return -1;
 }
 
-non_null()
-static int find_tcp_connection_relay(const TCP_Connections *tcp_c, const uint8_t *relay_pk);
+static int find_tcp_connection_relay(const TCP_Connections *_Nonnull tcp_c, const uint8_t *_Nonnull relay_pk);
 
 /** @brief Send an oob packet via the TCP relay corresponding to relay_pk.
  *
@@ -600,8 +655,7 @@ bool ip_port_to_tcp_connections_number(const IP_Port *ip_port, unsigned int *tcp
  * return connections_number on success.
  * return -1 on failure.
  */
-non_null()
-static int find_tcp_connection_to(const TCP_Connections *tcp_c, const uint8_t *public_key)
+static int find_tcp_connection_to(const TCP_Connections *_Nonnull tcp_c, const uint8_t *_Nonnull public_key)
 {
     for (uint32_t i = 0; i < tcp_c->connections_length; ++i) {
         const TCP_Connection_to *con_to = get_connection(tcp_c, i);
@@ -632,6 +686,10 @@ static int find_tcp_connection_relay(const TCP_Connections *tcp_c, const uint8_t
                     return i;
                 }
             } else {
+                if (tcp_con->connection == nullptr) {
+                    LOGGER_ERROR(tcp_c->logger, "TCP connection is null for tcp_con");
+                    return -1;
+                }
                 if (pk_equal(tcp_con_public_key(tcp_con->connection), relay_pk)) {
                     return i;
                 }
@@ -699,6 +757,10 @@ int kill_tcp_connection_to(TCP_Connections *tcp_c, int connections_number)
             }
 
             if (tcp_con->status == TCP_CONN_CONNECTED) {
+                if (tcp_con->connection == nullptr) {
+                    LOGGER_ERROR(tcp_c->logger, "TCP connection is null for tcp_con");
+                    continue;
+                }
                 send_disconnect_request(tcp_c->logger, tcp_con->connection, con_to->connections[i].connection_id);
             }
 
@@ -782,8 +844,7 @@ int set_tcp_connection_to_status(const TCP_Connections *tcp_c, int connections_n
     return 0;
 }
 
-non_null()
-static bool tcp_connection_in_conn(const TCP_Connection_to *con_to, unsigned int tcp_connections_number)
+static bool tcp_connection_in_conn(const TCP_Connection_to *_Nonnull con_to, unsigned int tcp_connections_number)
 {
     for (uint32_t i = 0; i < MAX_FRIEND_TCP_CONNECTIONS; ++i) {
         if (con_to->connections[i].tcp_connection == (tcp_connections_number + 1)) {
@@ -798,8 +859,7 @@ static bool tcp_connection_in_conn(const TCP_Connection_to *con_to, unsigned int
  * @return index on success.
  * @retval -1 on failure.
  */
-non_null()
-static int add_tcp_connection_to_conn(TCP_Connection_to *con_to, unsigned int tcp_connections_number)
+static int add_tcp_connection_to_conn(TCP_Connection_to *_Nonnull con_to, unsigned int tcp_connections_number)
 {
     if (tcp_connection_in_conn(con_to, tcp_connections_number)) {
         return -1;
@@ -821,8 +881,7 @@ static int add_tcp_connection_to_conn(TCP_Connection_to *con_to, unsigned int tc
  * @return index on success.
  * @retval -1 on failure.
  */
-non_null()
-static int rm_tcp_connection_from_conn(TCP_Connection_to *con_to, unsigned int tcp_connections_number)
+static int rm_tcp_connection_from_conn(TCP_Connection_to *_Nonnull con_to, unsigned int tcp_connections_number)
 {
     for (uint32_t i = 0; i < MAX_FRIEND_TCP_CONNECTIONS; ++i) {
         if (con_to->connections[i].tcp_connection == (tcp_connections_number + 1)) {
@@ -840,8 +899,7 @@ static int rm_tcp_connection_from_conn(TCP_Connection_to *con_to, unsigned int t
  * @return number of online connections on success.
  * @retval -1 on failure.
  */
-non_null()
-static uint32_t online_tcp_connection_from_conn(const TCP_Connection_to *con_to)
+static uint32_t online_tcp_connection_from_conn(const TCP_Connection_to *_Nonnull con_to)
 {
     uint32_t count = 0;
 
@@ -860,10 +918,7 @@ static uint32_t online_tcp_connection_from_conn(const TCP_Connection_to *con_to)
  * @return index on success.
  * @retval -1 on failure.
  */
-non_null()
-static int set_tcp_connection_status(TCP_Connection_to *con_to, unsigned int tcp_connections_number,
-                                     uint8_t status,
-                                     uint8_t connection_id)
+static int set_tcp_connection_status(TCP_Connection_to *_Nonnull con_to, unsigned int tcp_connections_number, uint8_t status, uint8_t connection_id)
 {
     for (uint32_t i = 0; i < MAX_FRIEND_TCP_CONNECTIONS; ++i) {
         if (con_to->connections[i].tcp_connection == (tcp_connections_number + 1)) {
@@ -911,8 +966,7 @@ int kill_tcp_relay_connection(TCP_Connections *tcp_c, int tcp_connections_number
     return wipe_tcp_connection(tcp_c, tcp_connections_number);
 }
 
-non_null()
-static int reconnect_tcp_relay_connection(TCP_Connections *tcp_c, int tcp_connections_number)
+static int reconnect_tcp_relay_connection(TCP_Connections *_Nonnull tcp_c, int tcp_connections_number)
 {
     TCP_con *tcp_con = get_tcp_connection(tcp_c, tcp_connections_number);
 
@@ -924,11 +978,16 @@ static int reconnect_tcp_relay_connection(TCP_Connections *tcp_c, int tcp_connec
         return -1;
     }
 
+    if (tcp_con->connection == nullptr) {
+        LOGGER_ERROR(tcp_c->logger, "TCP connection is null for tcp_con");
+        return -1;
+    }
     const IP_Port ip_port = tcp_con_ip_port(tcp_con->connection);
     uint8_t relay_pk[CRYPTO_PUBLIC_KEY_SIZE];
     memcpy(relay_pk, tcp_con_public_key(tcp_con->connection), CRYPTO_PUBLIC_KEY_SIZE);
     kill_tcp_connection(tcp_con->connection);
-    tcp_con->connection = new_tcp_connection(tcp_c->logger, tcp_c->mem, tcp_c->mono_time, tcp_c->rng, tcp_c->ns, &ip_port, relay_pk, tcp_c->self_public_key, tcp_c->self_secret_key, &tcp_c->proxy_info);
+    tcp_con->connection = new_tcp_connection(tcp_c->logger, tcp_c->mem, tcp_c->mono_time, tcp_c->rng, tcp_c->ns, &ip_port, relay_pk, tcp_c->self_public_key, tcp_c->self_secret_key, &tcp_c->proxy_info,
+                          tcp_c->net_profile);
 
     if (tcp_con->connection == nullptr) {
         kill_tcp_relay_connection(tcp_c, tcp_connections_number);
@@ -957,8 +1016,7 @@ static int reconnect_tcp_relay_connection(TCP_Connections *tcp_c, int tcp_connec
     return 0;
 }
 
-non_null()
-static int sleep_tcp_relay_connection(TCP_Connections *tcp_c, int tcp_connections_number)
+static int sleep_tcp_relay_connection(TCP_Connections *_Nonnull tcp_c, int tcp_connections_number)
 {
     TCP_con *tcp_con = get_tcp_connection(tcp_c, tcp_connections_number);
 
@@ -974,6 +1032,10 @@ static int sleep_tcp_relay_connection(TCP_Connections *tcp_c, int tcp_connection
         return -1;
     }
 
+    if (tcp_con->connection == nullptr) {
+        LOGGER_ERROR(tcp_c->logger, "TCP connection is null for tcp_con");
+        return -1;
+    }
     tcp_con->ip_port = tcp_con_ip_port(tcp_con->connection);
     memcpy(tcp_con->relay_pk, tcp_con_public_key(tcp_con->connection), CRYPTO_PUBLIC_KEY_SIZE);
 
@@ -1002,8 +1064,7 @@ static int sleep_tcp_relay_connection(TCP_Connections *tcp_c, int tcp_connection
     return 0;
 }
 
-non_null()
-static int unsleep_tcp_relay_connection(TCP_Connections *tcp_c, int tcp_connections_number)
+static int unsleep_tcp_relay_connection(TCP_Connections *_Nonnull tcp_c, int tcp_connections_number)
 {
     TCP_con *tcp_con = get_tcp_connection(tcp_c, tcp_connections_number);
 
@@ -1017,7 +1078,7 @@ static int unsleep_tcp_relay_connection(TCP_Connections *tcp_c, int tcp_connecti
 
     tcp_con->connection = new_tcp_connection(
                               tcp_c->logger, tcp_c->mem, tcp_c->mono_time, tcp_c->rng, tcp_c->ns, &tcp_con->ip_port,
-                              tcp_con->relay_pk, tcp_c->self_public_key, tcp_c->self_secret_key, &tcp_c->proxy_info);
+                              tcp_con->relay_pk, tcp_c->self_public_key, tcp_c->self_secret_key, &tcp_c->proxy_info, tcp_c->net_profile);
 
     if (tcp_con->connection == nullptr) {
         kill_tcp_relay_connection(tcp_c, tcp_connections_number);
@@ -1038,9 +1099,7 @@ static int unsleep_tcp_relay_connection(TCP_Connections *tcp_c, int tcp_connecti
  * return 0 on success.
  * return -1 on failure.
  */
-non_null()
-static int send_tcp_relay_routing_request(const TCP_Connections *tcp_c, int tcp_connections_number,
-        const uint8_t *public_key)
+static int send_tcp_relay_routing_request(const TCP_Connections *_Nonnull tcp_c, int tcp_connections_number, const uint8_t *_Nonnull public_key)
 {
     TCP_con *tcp_con = get_tcp_connection(tcp_c, tcp_connections_number);
 
@@ -1052,6 +1111,10 @@ static int send_tcp_relay_routing_request(const TCP_Connections *tcp_c, int tcp_
         return -1;
     }
 
+    if (tcp_con->connection == nullptr) {
+        LOGGER_ERROR(tcp_c->logger, "TCP connection is null for tcp_con");
+        return -1;
+    }
     if (send_routing_request(tcp_c->logger, tcp_con->connection, public_key) != 1) {
         return -1;
     }
@@ -1059,8 +1122,7 @@ static int send_tcp_relay_routing_request(const TCP_Connections *tcp_c, int tcp_
     return 0;
 }
 
-non_null()
-static int tcp_response_callback(void *object, uint8_t connection_id, const uint8_t *public_key)
+static int tcp_response_callback(void *_Nonnull object, uint8_t connection_id, const uint8_t *_Nonnull public_key)
 {
     const TCP_Client_Connection *tcp_client_con = (const TCP_Client_Connection *)object;
     const TCP_Connections *tcp_c = (const TCP_Connections *)tcp_con_custom_object(tcp_client_con);
@@ -1088,13 +1150,16 @@ static int tcp_response_callback(void *object, uint8_t connection_id, const uint
         return -1;
     }
 
+    if (tcp_con->connection == nullptr) {
+        LOGGER_ERROR(tcp_c->logger, "TCP connection is null for tcp_con");
+        return -1;
+    }
     set_tcp_connection_number(tcp_con->connection, connection_id, connections_number);
 
     return 0;
 }
 
-non_null()
-static int tcp_status_callback(void *object, uint32_t number, uint8_t connection_id, uint8_t status)
+static int tcp_status_callback(void *_Nonnull object, uint32_t number, uint8_t connection_id, uint8_t status)
 {
     const TCP_Client_Connection *tcp_client_con = (const TCP_Client_Connection *)object;
     const TCP_Connections *tcp_c = (const TCP_Connections *)tcp_con_custom_object(tcp_client_con);
@@ -1132,12 +1197,10 @@ static int tcp_status_callback(void *object, uint32_t number, uint8_t connection
     return 0;
 }
 
-non_null(1, 4) nullable(6)
-static int tcp_conn_data_callback(void *object, uint32_t number, uint8_t connection_id, const uint8_t *data,
-                                  uint16_t length, void *userdata)
+static int tcp_conn_data_callback(void *_Nonnull object, uint32_t number, uint8_t connection_id, const uint8_t *_Nonnull data,
+                                  uint16_t length, void *_Nullable userdata)
 {
     const TCP_Client_Connection *tcp_client_con = (TCP_Client_Connection *)object;
-
     if (length == 0) {
         return -1;
     }
@@ -1164,9 +1227,7 @@ static int tcp_conn_data_callback(void *object, uint32_t number, uint8_t connect
     return 0;
 }
 
-non_null()
-static int tcp_conn_oob_callback(void *object, const uint8_t *public_key, const uint8_t *data, uint16_t length,
-                                 void *userdata)
+static int tcp_conn_oob_callback(void *_Nonnull object, const uint8_t *_Nonnull public_key, const uint8_t *_Nonnull data, uint16_t length, void *_Nonnull userdata)
 {
     const TCP_Client_Connection *tcp_client_con = (const TCP_Client_Connection *)object;
 
@@ -1199,8 +1260,7 @@ static int tcp_conn_oob_callback(void *object, const uint8_t *public_key, const 
     return 0;
 }
 
-non_null()
-static int tcp_onion_callback(void *object, const uint8_t *data, uint16_t length, void *userdata)
+static int tcp_onion_callback(void *_Nonnull object, const uint8_t *_Nonnull data, uint16_t length, void *_Nonnull userdata)
 {
     TCP_Connections *tcp_c = (TCP_Connections *)object;
 
@@ -1211,8 +1271,7 @@ static int tcp_onion_callback(void *object, const uint8_t *data, uint16_t length
     return 0;
 }
 
-non_null()
-static void tcp_forwarding_callback(void *object, const uint8_t *data, uint16_t length, void *userdata)
+static void tcp_forwarding_callback(void *_Nonnull object, const uint8_t *_Nonnull data, uint16_t length, void *_Nonnull userdata)
 {
     TCP_Connections *tcp_c = (TCP_Connections *)object;
 
@@ -1226,8 +1285,7 @@ static void tcp_forwarding_callback(void *object, const uint8_t *data, uint16_t 
  * return 0 on success.
  * return -1 on failure.
  */
-non_null()
-static int tcp_relay_set_callbacks(TCP_Connections *tcp_c, int tcp_connections_number)
+static int tcp_relay_set_callbacks(TCP_Connections *_Nonnull tcp_c, int tcp_connections_number)
 {
     TCP_con *tcp_con = get_tcp_connection(tcp_c, tcp_connections_number);
 
@@ -1249,8 +1307,7 @@ static int tcp_relay_set_callbacks(TCP_Connections *tcp_c, int tcp_connections_n
     return 0;
 }
 
-non_null()
-static int tcp_relay_on_online(TCP_Connections *tcp_c, int tcp_connections_number)
+static int tcp_relay_on_online(TCP_Connections *_Nonnull tcp_c, int tcp_connections_number)
 {
     TCP_con *tcp_con = get_tcp_connection(tcp_c, tcp_connections_number);
 
@@ -1290,8 +1347,7 @@ static int tcp_relay_on_online(TCP_Connections *tcp_c, int tcp_connections_numbe
     return 0;
 }
 
-non_null()
-static int add_tcp_relay_instance(TCP_Connections *tcp_c, const IP_Port *ip_port, const uint8_t *relay_pk)
+static int add_tcp_relay_instance(TCP_Connections *_Nonnull tcp_c, const IP_Port *_Nonnull ip_port, const uint8_t *_Nonnull relay_pk)
 {
     IP_Port ipp_copy = *ip_port;
 
@@ -1315,7 +1371,7 @@ static int add_tcp_relay_instance(TCP_Connections *tcp_c, const IP_Port *ip_port
 
     tcp_con->connection = new_tcp_connection(
                               tcp_c->logger, tcp_c->mem, tcp_c->mono_time, tcp_c->rng, tcp_c->ns, &ipp_copy,
-                              relay_pk, tcp_c->self_public_key, tcp_c->self_secret_key, &tcp_c->proxy_info);
+                              relay_pk, tcp_c->self_public_key, tcp_c->self_secret_key, &tcp_c->proxy_info, tcp_c->net_profile);
 
     if (tcp_con->connection == nullptr) {
         return -1;
@@ -1446,8 +1502,7 @@ uint32_t tcp_connection_to_online_tcp_relays(const TCP_Connections *tcp_c, int c
  * Returns true if the relay was successfully copied.
  * Returns false if the connection index is invalid, or if the relay is not connected.
  */
-non_null()
-static bool copy_tcp_relay_conn(const TCP_Connections *tcp_c, Node_format *tcp_relay, uint16_t idx)
+static bool copy_tcp_relay_conn(const TCP_Connections *_Nonnull tcp_c, Node_format *_Nonnull tcp_relay, uint16_t idx)
 {
     const TCP_con *tcp_con = get_tcp_connection(tcp_c, idx);
 
@@ -1459,6 +1514,10 @@ static bool copy_tcp_relay_conn(const TCP_Connections *tcp_c, Node_format *tcp_r
         return false;
     }
 
+    if (tcp_con->connection == nullptr) {
+        LOGGER_ERROR(tcp_c->logger, "TCP connection is null for tcp_con");
+        return false;
+    }
     memcpy(tcp_relay->public_key, tcp_con_public_key(tcp_con->connection), CRYPTO_PUBLIC_KEY_SIZE);
     tcp_relay->ip_port = tcp_con_ip_port(tcp_con->connection);
 
@@ -1591,7 +1650,7 @@ int set_tcp_onion_status(TCP_Connections *tcp_c, bool status)
  * Returns NULL on failure.
  */
 TCP_Connections *new_tcp_connections(const Logger *logger, const Memory *mem, const Random *rng, const Network *ns,
-                                     Mono_Time *mono_time, const uint8_t *secret_key, const TCP_Proxy_Info *proxy_info)
+                                     Mono_Time *mono_time, const uint8_t *secret_key, const TCP_Proxy_Info *proxy_info, Net_Profile *tcp_np)
 {
     assert(logger != nullptr);
     assert(mem != nullptr);
@@ -1609,6 +1668,7 @@ TCP_Connections *new_tcp_connections(const Logger *logger, const Memory *mem, co
         return nullptr;
     }
 
+    temp->net_profile = tcp_np;
     temp->logger = logger;
     temp->mem = mem;
     temp->rng = rng;
@@ -1622,17 +1682,19 @@ TCP_Connections *new_tcp_connections(const Logger *logger, const Memory *mem, co
     return temp;
 }
 
-non_null(1, 2) nullable(3)
-static void do_tcp_conns(const Logger *logger, TCP_Connections *tcp_c, void *userdata)
+static void do_tcp_conns(const Logger *_Nonnull logger, TCP_Connections *_Nonnull tcp_c, void *_Nullable userdata)
 {
     for (uint32_t i = 0; i < tcp_c->tcp_connections_length; ++i) {
         TCP_con *tcp_con = get_tcp_connection(tcp_c, i);
-
         if (tcp_con == nullptr) {
             continue;
         }
 
         if (tcp_con->status != TCP_CONN_SLEEPING) {
+            if (tcp_con->connection == nullptr) {
+                LOGGER_ERROR(logger, "TCP connection is null for tcp_con");
+                continue;
+            }
             do_tcp_connection(logger, tcp_c->mono_time, tcp_con->connection, userdata);
 
             /* callbacks can change TCP connection address. */
@@ -1641,6 +1703,10 @@ static void do_tcp_conns(const Logger *logger, TCP_Connections *tcp_c, void *use
             // Make sure the TCP connection wasn't dropped in any of the callbacks.
             assert(tcp_con != nullptr);
 
+            if (tcp_con->connection == nullptr) {
+                LOGGER_ERROR(logger, "TCP connection is null for tcp_con");
+                continue;
+            }
             if (tcp_con_status(tcp_con->connection) == TCP_CLIENT_DISCONNECTED) {
                 if (tcp_con->status == TCP_CONN_CONNECTED) {
                     reconnect_tcp_relay_connection(tcp_c, i);
@@ -1651,6 +1717,10 @@ static void do_tcp_conns(const Logger *logger, TCP_Connections *tcp_c, void *use
                 continue;
             }
 
+            if (tcp_con->connection == nullptr) {
+                LOGGER_ERROR(logger, "TCP connection is null for tcp_con");
+                continue;
+            }
             if (tcp_con->status == TCP_CONN_VALID && tcp_con_status(tcp_con->connection) == TCP_CLIENT_CONFIRMED) {
                 tcp_relay_on_online(tcp_c, i);
             }
@@ -1669,9 +1739,12 @@ static void do_tcp_conns(const Logger *logger, TCP_Connections *tcp_c, void *use
     }
 }
 
-non_null()
-static void kill_nonused_tcp(TCP_Connections *tcp_c)
+static void kill_nonused_tcp(TCP_Connections *_Nullable tcp_c)
 {
+    if (tcp_c == nullptr) {
+        return;
+    }
+
     if (tcp_c->tcp_connections_length <= RECOMMENDED_FRIEND_TCP_CONNECTIONS) {
         return;
     }
@@ -1727,3 +1800,4 @@ void kill_tcp_connections(TCP_Connections *tcp_c)
     mem_delete(tcp_c->mem, tcp_c->connections);
     mem_delete(tcp_c->mem, tcp_c);
 }
+

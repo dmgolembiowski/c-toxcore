@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2022 The TokTok team.
+ * Copyright © 2022-2025 The TokTok team.
  */
 
 #include "shared_key_cache.h"
@@ -21,17 +21,16 @@ typedef struct Shared_Key {
 } Shared_Key;
 
 struct Shared_Key_Cache {
-    Shared_Key *keys;
-    const uint8_t *self_secret_key;
+    Shared_Key *_Nonnull keys;
+    const uint8_t *_Nonnull self_secret_key;
     uint64_t timeout; /** After this time (in seconds), a key is erased on the next housekeeping cycle */
-    const Mono_Time *mono_time;
-    const Memory *mem;
-    const Logger *log;
+    const Mono_Time *_Nonnull mono_time;
+    const Memory *_Nonnull mem;
+    const Logger *_Nonnull log;
     uint8_t keys_per_slot;
 };
 
-non_null()
-static bool shared_key_is_empty(const Logger *log, const Shared_Key *k)
+static bool shared_key_is_empty(const Logger *_Nonnull log, const Shared_Key *_Nonnull k)
 {
     LOGGER_ASSERT(log, k != nullptr, "shared key must not be NULL");
     /*
@@ -41,8 +40,7 @@ static bool shared_key_is_empty(const Logger *log, const Shared_Key *k)
     return k->time_last_requested == 0;
 }
 
-non_null()
-static void shared_key_set_empty(const Logger *log, Shared_Key *k)
+static void shared_key_set_empty(const Logger *_Nonnull log, Shared_Key *_Nonnull k)
 {
     crypto_memzero(k, sizeof(Shared_Key));
     LOGGER_ASSERT(log, shared_key_is_empty(log, k), "shared key must be empty after clearing it");

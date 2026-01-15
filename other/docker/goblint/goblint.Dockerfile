@@ -1,5 +1,5 @@
 FROM toxchat/c-toxcore:sources AS sources
-FROM ghcr.io/goblint/analyzer:latest
+FROM ghcr.io/goblint/analyzer:2.5.0
 
 RUN apt-get update && \
  DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends \
@@ -11,9 +11,9 @@ RUN apt-get update && \
 WORKDIR /work
 COPY --from=sources /src/ /work/
 
-COPY other/make_single_file /work/other/
+COPY other/deploy/single-file/make_single_file /work/
 
-RUN other/make_single_file -core auto_tests/tox_new_test.c other/docker/goblint/sodium.c > analysis.c
+RUN ./make_single_file -core auto_tests/tox_new_test.c other/docker/goblint/sodium.c > analysis.c
 # Try compiling+linking just to make sure we have all the fake functions.
 RUN tcc analysis.c
 

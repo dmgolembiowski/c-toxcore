@@ -5,29 +5,37 @@
 #include <cstring>
 #include <vector>
 
-#include "../testing/fuzzing/fuzz_support.hh"
+#include "../testing/support/public/fuzz_data.hh"
+#include "../testing/support/public/fuzz_helpers.hh"
+#include "../testing/support/public/simulated_environment.hh"
 #include "tox_dispatch.h"
 
 namespace {
 
+using tox::test::configure_fuzz_memory_source;
+using tox::test::Fuzz_Data;
+using tox::test::SimulatedEnvironment;
+
 void TestUnpack(Fuzz_Data data)
 {
     // 2 bytes: size of the events data
-    CONSUME_OR_RETURN(const uint8_t *events_size_bytes, data, sizeof(uint16_t));
-    uint16_t events_size;
-    std::memcpy(&events_size, events_size_bytes, sizeof(uint16_t));
+    CONSUME_OR_RETURN(const std::uint8_t *events_size_bytes, data, sizeof(std::uint16_t));
+    std::uint16_t events_size;
+    std::memcpy(&events_size, events_size_bytes, sizeof(std::uint16_t));
 
     // events_size bytes: events data (max 64K)
-    CONSUME_OR_RETURN(const uint8_t *events_data, data, events_size);
+    CONSUME_OR_RETURN(const std::uint8_t *events_data, data, events_size);
 
     if (data.empty()) {
-        // If there's no more input, no malloc failure paths can possibly be
+        // If there's no more input, no std::malloc failure paths can possibly be
         // tested, so we ignore this input.
         return;
     }
 
-    // rest of the fuzz data is input for malloc
-    Fuzz_System sys{data};
+    // rest of the fuzz data is input for std::malloc
+    SimulatedEnvironment env;
+    auto node = env.create_node(33445);
+    configure_fuzz_memory_source(env.fake_memory(), data);
 
     Tox_Dispatch *dispatch = tox_dispatch_new(nullptr);
     assert(dispatch != nullptr);
@@ -73,9 +81,9 @@ void TestUnpack(Fuzz_Data data)
     tox_events_callback_group_join_fail(dispatch, ignore);
     tox_events_callback_group_moderation(dispatch, ignore);
 
-    Tox_Events *events = tox_events_load(sys.sys.get(), events_data, events_size);
+    Tox_Events *events = tox_events_load(&node->system, events_data, events_size);
     if (events) {
-        std::vector<uint8_t> packed(tox_events_bytes_size(events));
+        std::vector<std::uint8_t> packed(tox_events_bytes_size(events));
         tox_events_get_bytes(events, packed.data());
 
         tox_dispatch_invoke(dispatch, events, nullptr);
@@ -86,8 +94,8 @@ void TestUnpack(Fuzz_Data data)
 
 }  // namespace
 
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size);
-extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size)
+extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size);
+extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t *data, std::size_t size)
 {
     TestUnpack(Fuzz_Data(data, size));
     return 0;

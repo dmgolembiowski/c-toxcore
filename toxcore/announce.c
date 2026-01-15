@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later
- * Copyright © 2020-2021 The TokTok team.
+ * Copyright © 2020-2025 The TokTok team.
  */
 
 /**
@@ -9,7 +9,6 @@
 #include "announce.h"
 
 #include <assert.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "DHT.h"
@@ -26,7 +25,7 @@
 #include "timed_auth.h"
 #include "util.h"
 
-// Settings for the shared key cache
+/* Settings for the shared key cache */
 #define MAX_KEYS_PER_SLOT 4
 #define KEYS_TIMEOUT 600
 
@@ -52,22 +51,22 @@ uint8_t announce_response_of_request_type(uint8_t request_type)
 typedef struct Announce_Entry {
     uint64_t store_until;
     uint8_t data_public_key[CRYPTO_PUBLIC_KEY_SIZE];
-    uint8_t *data;
+    uint8_t *_Nullable data;
     uint32_t length;
 } Announce_Entry;
 
 struct Announcements {
-    const Logger *log;
-    const Memory *mem;
-    const Random *rng;
-    Forwarding *forwarding;
-    const Mono_Time *mono_time;
-    DHT *dht;
-    Networking_Core *net;
-    const uint8_t *public_key;
-    const uint8_t *secret_key;
+    const Logger *_Nonnull log;
+    const Memory *_Nonnull mem;
+    const Random *_Nonnull rng;
+    Forwarding *_Nonnull forwarding;
+    const Mono_Time *_Nonnull mono_time;
+    DHT *_Nonnull dht;
+    Networking_Core *_Nonnull net;
+    const uint8_t *_Nonnull public_key;
+    const uint8_t *_Nonnull secret_key;
 
-    Shared_Key_Cache *shared_keys;
+    Shared_Key_Cache *_Nonnull shared_keys;
     uint8_t hmac_key[CRYPTO_HMAC_KEY_SIZE];
 
     int32_t synch_offset;
@@ -86,21 +85,18 @@ void announce_set_synch_offset(Announcements *announce, int32_t synch_offset)
  * An entry is considered to be "deleted" for the purposes of the protocol
  * once it has timed out.
  */
-non_null()
-static bool entry_is_empty(const Announcements *announce, const Announce_Entry *entry)
+static bool entry_is_empty(const Announcements *_Nonnull announce, const Announce_Entry *_Nonnull entry)
 {
     return mono_time_get(announce->mono_time) >= entry->store_until;
 }
 
-non_null()
-static void delete_entry(Announce_Entry *entry)
+static void delete_entry(Announce_Entry *_Nonnull entry)
 {
     entry->store_until = 0;
 }
 
 /** Return bits (at most 8) from pk starting at index as uint8_t */
-non_null()
-static uint8_t truncate_pk_at_index(const uint8_t *pk, uint16_t index, uint16_t bits)
+static uint8_t truncate_pk_at_index(const uint8_t *_Nonnull pk, uint16_t index, uint16_t bits)
 {
     assert(bits < 8);
     const uint8_t i = index / 8;
@@ -117,14 +113,12 @@ uint16_t announce_get_bucketnum(const uint8_t *base, const uint8_t *pk)
            truncate_pk_at_index(pk, index + 1, ANNOUNCE_BUCKET_PREFIX_LENGTH);
 }
 
-non_null()
-static Announce_Entry *bucket_of_key(Announcements *announce, const uint8_t *pk)
+static Announce_Entry *bucket_of_key(Announcements *_Nonnull announce, const uint8_t *_Nonnull pk)
 {
     return &announce->entries[announce_get_bucketnum(announce->public_key, pk) * ANNOUNCE_BUCKET_SIZE];
 }
 
-non_null()
-static Announce_Entry *get_stored(Announcements *announce, const uint8_t *data_public_key)
+static Announce_Entry *get_stored(Announcements *_Nonnull announce, const uint8_t *_Nonnull data_public_key)
 {
     Announce_Entry *const bucket = bucket_of_key(announce, data_public_key);
 
@@ -141,14 +135,12 @@ static Announce_Entry *get_stored(Announcements *announce, const uint8_t *data_p
     return nullptr;
 }
 
-non_null()
-static const Announce_Entry *bucket_of_key_const(const Announcements *announce, const uint8_t *pk)
+static const Announce_Entry *bucket_of_key_const(const Announcements *_Nonnull announce, const uint8_t *_Nonnull pk)
 {
     return &announce->entries[announce_get_bucketnum(announce->public_key, pk) * ANNOUNCE_BUCKET_SIZE];
 }
 
-non_null()
-static const Announce_Entry *get_stored_const(const Announcements *announce, const uint8_t *data_public_key)
+static const Announce_Entry *get_stored_const(const Announcements *_Nonnull announce, const uint8_t *_Nonnull data_public_key)
 {
     const Announce_Entry *const bucket = bucket_of_key_const(announce, data_public_key);
 
@@ -187,8 +179,7 @@ bool announce_on_stored(const Announcements *announce, const uint8_t *data_publi
  * of greatest 2-adic distance greater than that of the key bucket if one
  * exists, else nullptr.
  */
-non_null()
-static Announce_Entry *find_entry_slot(Announcements *announce, const uint8_t *data_public_key)
+static Announce_Entry *find_entry_slot(Announcements *_Nonnull announce, const uint8_t *_Nonnull data_public_key)
 {
     Announce_Entry *const bucket = bucket_of_key(announce, data_public_key);
 
@@ -217,8 +208,7 @@ static Announce_Entry *find_entry_slot(Announcements *announce, const uint8_t *d
     return slot;
 }
 
-non_null()
-static bool would_accept_store_request(Announcements *announce, const uint8_t *data_public_key)
+static bool would_accept_store_request(Announcements *_Nonnull announce, const uint8_t *_Nonnull data_public_key)
 {
     return find_entry_slot(announce, data_public_key) != nullptr;
 }
@@ -239,9 +229,9 @@ bool announce_store_data(Announcements *announce, const uint8_t *data_public_key
     if (length > 0) {
         assert(data != nullptr);
 
-        free(entry->data);
+        mem_delete(announce->mem, entry->data);
 
-        uint8_t *entry_data = (uint8_t *)malloc(length);
+        uint8_t *entry_data = (uint8_t *)mem_balloc(announce->mem, length);
 
         if (entry_data == nullptr) {
             entry->data = nullptr;  // TODO(iphydf): Is this necessary?
@@ -259,8 +249,7 @@ bool announce_store_data(Announcements *announce, const uint8_t *data_public_key
     return true;
 }
 
-non_null()
-static uint32_t calculate_timeout(const Announcements *announce, uint32_t requested_timeout)
+static uint32_t calculate_timeout(const Announcements *_Nonnull announce, uint32_t requested_timeout)
 {
     const uint64_t uptime = mono_time_get(announce->mono_time) - announce->start_time;
     const uint32_t max_announcement_timeout = max_u32(
@@ -274,11 +263,10 @@ static uint32_t calculate_timeout(const Announcements *announce, uint32_t reques
 
 #define DATA_SEARCH_TO_AUTH_MAX_SIZE (CRYPTO_PUBLIC_KEY_SIZE * 2 + MAX_PACKED_IPPORT_SIZE + MAX_SENDBACK_SIZE)
 
-non_null(1, 2, 3, 4, 7) nullable(5)
-static int create_data_search_to_auth(const Logger *logger, const uint8_t *data_public_key,
-                                      const uint8_t *requester_key,
-                                      const IP_Port *source, const uint8_t *sendback, uint16_t sendback_length,
-                                      uint8_t *dest, uint16_t max_length)
+static int create_data_search_to_auth(const Logger *_Nonnull logger, const uint8_t *_Nonnull data_public_key,
+                                      const uint8_t *_Nonnull requester_key,
+                                      const IP_Port *_Nonnull source, const uint8_t *_Nullable sendback, uint16_t sendback_length,
+                                      uint8_t *_Nonnull dest, uint16_t max_length)
 {
     if (max_length < DATA_SEARCH_TO_AUTH_MAX_SIZE
             || sendback_length > MAX_SENDBACK_SIZE) {
@@ -304,12 +292,8 @@ static int create_data_search_to_auth(const Logger *logger, const uint8_t *data_
 
 #define DATA_SEARCH_TIMEOUT 60
 
-non_null()
-static int create_reply_plain_data_search_request(Announcements *announce,
-        const IP_Port *source,
-        const uint8_t *data, uint16_t length,
-        uint8_t *reply, uint16_t reply_max_length,
-        const uint8_t *to_auth, uint16_t to_auth_length)
+static int create_reply_plain_data_search_request(Announcements *_Nonnull announce, const IP_Port *_Nonnull source, const uint8_t *_Nonnull data, uint16_t length, uint8_t *_Nonnull reply,
+        uint16_t reply_max_length, const uint8_t *_Nonnull to_auth, uint16_t to_auth_length)
 {
     if (length != CRYPTO_PUBLIC_KEY_SIZE &&
             length != CRYPTO_PUBLIC_KEY_SIZE + CRYPTO_SHA256_SIZE) {
@@ -344,6 +328,10 @@ static int create_reply_plain_data_search_request(Announcements *announce,
     } else {
         *p = 1;
         ++p;
+        if (stored->data == nullptr) {
+            LOGGER_ERROR(announce->log, "Stored data is null for public key.");
+            return -1;
+        }
         crypto_sha256(p, stored->data, stored->length);
         p += CRYPTO_SHA256_SIZE;
     }
@@ -383,13 +371,8 @@ static int create_reply_plain_data_search_request(Announcements *announce,
     return reply_len;
 }
 
-non_null()
-static int create_reply_plain_data_retrieve_request(
-    const Announcements *announce,
-    const IP_Port *source,
-    const uint8_t *data, uint16_t length,
-    uint8_t *reply, uint16_t reply_max_length,
-    const uint8_t *to_auth, uint16_t to_auth_length)
+static int create_reply_plain_data_retrieve_request(const Announcements *_Nonnull announce, const IP_Port *_Nonnull source, const uint8_t *_Nonnull data, uint16_t length,
+        uint8_t *_Nonnull reply, uint16_t reply_max_length, const uint8_t *_Nonnull to_auth, uint16_t to_auth_length)
 {
     if (length != CRYPTO_PUBLIC_KEY_SIZE + 1 + TIMED_AUTH_SIZE) {
         return -1;
@@ -426,12 +409,8 @@ static int create_reply_plain_data_retrieve_request(
     return reply_len;
 }
 
-non_null()
-static int create_reply_plain_store_announce_request(Announcements *announce,
-        const IP_Port *source,
-        const uint8_t *data, uint16_t length,
-        uint8_t *reply, uint16_t reply_max_length,
-        const uint8_t *to_auth, uint16_t to_auth_length)
+static int create_reply_plain_store_announce_request(Announcements *_Nonnull announce, const IP_Port *_Nonnull source, const uint8_t *_Nonnull data, uint16_t length, uint8_t *_Nonnull reply,
+        uint16_t reply_max_length, const uint8_t *_Nonnull to_auth, uint16_t to_auth_length)
 {
     const int plain_len = (int)length - (CRYPTO_PUBLIC_KEY_SIZE + CRYPTO_NONCE_SIZE + CRYPTO_MAC_SIZE);
     const int announcement_len = plain_len - (TIMED_AUTH_SIZE + sizeof(uint32_t) + 1);
@@ -451,7 +430,7 @@ static int create_reply_plain_store_announce_request(Announcements *announce,
         return -1;
     }
 
-    if (decrypt_data_symmetric(shared_key,
+    if (decrypt_data_symmetric(announce->mem, shared_key,
                                data + CRYPTO_PUBLIC_KEY_SIZE,
                                data + CRYPTO_PUBLIC_KEY_SIZE + CRYPTO_NONCE_SIZE,
                                plain_len + CRYPTO_MAC_SIZE,
@@ -487,6 +466,10 @@ static int create_reply_plain_store_announce_request(Announcements *announce,
         }
 
         uint8_t stored_hash[CRYPTO_SHA256_SIZE];
+        if (stored->data == nullptr) {
+            LOGGER_ERROR(announce->log, "Stored data is null for public key.");
+            return -1;
+        }
         crypto_sha256(stored_hash, stored->data, stored->length);
 
         if (!crypto_sha256_eq(announcement, stored_hash)) {
@@ -514,12 +497,11 @@ static int create_reply_plain_store_announce_request(Announcements *announce,
     return reply_len;
 }
 
-non_null(1, 2, 3, 7, 9) nullable(5)
-static int create_reply_plain(Announcements *announce,
-                              const uint8_t *requester_key, const IP_Port *source, uint8_t type,
-                              const uint8_t *sendback, uint16_t sendback_length,
-                              const uint8_t *data, uint16_t length,
-                              uint8_t *reply, uint16_t reply_max_length)
+static int create_reply_plain(Announcements *_Nonnull announce,
+                              const uint8_t *_Nonnull requester_key, const IP_Port *_Nonnull source, uint8_t type,
+                              const uint8_t *_Nullable sendback, uint16_t sendback_length,
+                              const uint8_t *_Nonnull data, uint16_t length,
+                              uint8_t *_Nonnull reply, uint16_t reply_max_length)
 {
     if (length < CRYPTO_PUBLIC_KEY_SIZE) {
         return -1;
@@ -553,14 +535,12 @@ static int create_reply_plain(Announcements *announce,
     }
 }
 
-non_null(1, 2, 5, 7) nullable(3)
-static int create_reply(Announcements *announce, const IP_Port *source,
-                        const uint8_t *sendback, uint16_t sendback_length,
-                        const uint8_t *data, uint16_t length,
-                        uint8_t *reply, uint16_t reply_max_length)
+static int create_reply(Announcements *_Nonnull announce, const IP_Port *_Nonnull source,
+                        const uint8_t *_Nullable sendback, uint16_t sendback_length,
+                        const uint8_t *_Nonnull data, uint16_t length,
+                        uint8_t *_Nonnull reply, uint16_t reply_max_length)
 {
     const int plain_len = (int)length - (1 + CRYPTO_PUBLIC_KEY_SIZE + CRYPTO_NONCE_SIZE + CRYPTO_MAC_SIZE);
-
     if (plain_len < (int)sizeof(uint64_t)) {
         return -1;
     }
@@ -568,7 +548,7 @@ static int create_reply(Announcements *announce, const IP_Port *source,
     VLA(uint8_t, plain, plain_len);
     const uint8_t *shared_key = dht_get_shared_key_recv(announce->dht, data + 1);
 
-    if (decrypt_data_symmetric(shared_key,
+    if (decrypt_data_symmetric(announce->mem, shared_key,
                                data + 1 + CRYPTO_PUBLIC_KEY_SIZE,
                                data + 1 + CRYPTO_PUBLIC_KEY_SIZE + CRYPTO_NONCE_SIZE,
                                plain_len + CRYPTO_MAC_SIZE,
@@ -579,7 +559,7 @@ static int create_reply(Announcements *announce, const IP_Port *source,
     const int plain_reply_max_len = (int)reply_max_length -
                                     (1 + CRYPTO_PUBLIC_KEY_SIZE + CRYPTO_NONCE_SIZE + CRYPTO_MAC_SIZE);
 
-    if (plain_reply_max_len < sizeof(uint64_t)) {
+    if (plain_reply_max_len < (int)sizeof(uint64_t)) {
         return -1;
     }
 
@@ -606,13 +586,11 @@ static int create_reply(Announcements *announce, const IP_Port *source,
                              response_type, plain_reply, plain_reply_len, reply, reply_max_length);
 }
 
-non_null(1, 2, 3, 5) nullable(7)
-static void forwarded_request_callback(void *object, const IP_Port *forwarder,
-                                       const uint8_t *sendback, uint16_t sendback_length,
-                                       const uint8_t *data, uint16_t length, void *userdata)
+static void forwarded_request_callback(void *_Nonnull object, const IP_Port *_Nonnull forwarder,
+                                       const uint8_t *_Nonnull sendback, uint16_t sendback_length,
+                                       const uint8_t *_Nonnull data, uint16_t length, void *_Nullable userdata)
 {
     Announcements *announce = (Announcements *) object;
-
     uint8_t reply[MAX_FORWARD_DATA_SIZE];
 
     const int len = create_reply(announce, forwarder,
@@ -626,12 +604,10 @@ static void forwarded_request_callback(void *object, const IP_Port *forwarder,
     forward_reply(announce->net, forwarder, sendback, sendback_length, reply, len);
 }
 
-non_null(1, 2, 3) nullable(5)
 static int handle_dht_announce_request(
-    void *object, const IP_Port *source, const uint8_t *packet, uint16_t length, void *userdata)
+    void *_Nonnull object, const IP_Port *_Nonnull source, const uint8_t *_Nonnull packet, uint16_t length, void *_Nullable userdata)
 {
     Announcements *announce = (Announcements *)object;
-
     uint8_t reply[MAX_FORWARD_DATA_SIZE];
 
     const int len
@@ -645,13 +621,13 @@ static int handle_dht_announce_request(
 }
 
 Announcements *new_announcements(const Logger *log, const Memory *mem, const Random *rng, const Mono_Time *mono_time,
-                                 Forwarding *forwarding)
+                                 Forwarding *forwarding, DHT *dht, Networking_Core *net)
 {
     if (log == nullptr || mono_time == nullptr || forwarding == nullptr) {
         return nullptr;
     }
 
-    Announcements *announce = (Announcements *)calloc(1, sizeof(Announcements));
+    Announcements *announce = (Announcements *)mem_alloc(mem, sizeof(Announcements));
 
     if (announce == nullptr) {
         return nullptr;
@@ -662,16 +638,17 @@ Announcements *new_announcements(const Logger *log, const Memory *mem, const Ran
     announce->rng = rng;
     announce->forwarding = forwarding;
     announce->mono_time = mono_time;
-    announce->dht = forwarding_get_dht(forwarding);
-    announce->net = dht_get_net(announce->dht);
+    announce->dht = dht;
+    announce->net = net;
     announce->public_key = dht_get_self_public_key(announce->dht);
     announce->secret_key = dht_get_self_secret_key(announce->dht);
     new_hmac_key(announce->rng, announce->hmac_key);
-    announce->shared_keys = shared_key_cache_new(log, mono_time, mem, announce->secret_key, KEYS_TIMEOUT, MAX_KEYS_PER_SLOT);
-    if (announce->shared_keys == nullptr) {
-        free(announce);
+    Shared_Key_Cache *const shared_keys = shared_key_cache_new(log, mono_time, mem, announce->secret_key, KEYS_TIMEOUT, MAX_KEYS_PER_SLOT);
+    if (shared_keys == nullptr) {
+        mem_delete(announce->mem, announce);
         return nullptr;
     }
+    announce->shared_keys = shared_keys;
 
     announce->start_time = mono_time_get(announce->mono_time);
 
@@ -700,8 +677,8 @@ void kill_announcements(Announcements *announce)
     shared_key_cache_free(announce->shared_keys);
 
     for (uint32_t i = 0; i < ANNOUNCE_BUCKETS * ANNOUNCE_BUCKET_SIZE; ++i) {
-        free(announce->entries[i].data);
+        mem_delete(announce->mem, announce->entries[i].data);
     }
 
-    free(announce);
+    mem_delete(announce->mem, announce);
 }
